@@ -5,6 +5,11 @@ from backtester.strategy import VolumeStrategy, PARAM_GRID, ENGINE_PARAM_GRID
 from backtester.engine import BacktestEngine, BacktestResult
 
 
+STRAT_PARAM_KEYS = ("band_multiplier_inner", "band_multiplier_outer",
+                     "obv_lookback", "ad_lookback")
+ENGINE_PARAM_KEYS = ("sl_pct", "tsl_pct", "tp_pct", "ttp_pct")
+
+
 def _build_combos(
     strategy_grid: dict | None = None,
     engine_grid: dict | None = None,
@@ -39,16 +44,8 @@ def run_optimization(
     rows: list[dict] = []
 
     for combo in combos:
-        strat_params = {
-            k: combo[k]
-            for k in ("band_multiplier", "obv_lookback", "ad_lookback")
-            if k in combo
-        }
-        engine_params = {
-            k: combo[k]
-            for k in ("sl_pct", "tsl_pct", "tp_pct", "ttp_pct")
-            if k in combo
-        }
+        strat_params = {k: combo[k] for k in STRAT_PARAM_KEYS if k in combo}
+        engine_params = {k: combo[k] for k in ENGINE_PARAM_KEYS if k in combo}
 
         strategy = VolumeStrategy(**strat_params)
         signals = strategy.generate_signals(df)

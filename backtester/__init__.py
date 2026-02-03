@@ -1,5 +1,8 @@
 from backtester.indicators import vwap, vwap_bands, obv, ad_line
-from backtester.strategy import VolumeStrategy
+from backtester.strategy import (
+    VolumeStrategy, TIMEFRAME_DEFAULTS, get_defaults,
+    PARAM_GRID_15MIN, ENGINE_PARAM_GRID_15MIN,
+)
 from backtester.engine import BacktestEngine, BacktestResult, Trade
 from backtester.optimizer import run_optimization, best_params
 from backtester.missed_trades import find_missed_trades
@@ -12,6 +15,10 @@ __all__ = [
     "obv",
     "ad_line",
     "VolumeStrategy",
+    "TIMEFRAME_DEFAULTS",
+    "get_defaults",
+    "PARAM_GRID_15MIN",
+    "ENGINE_PARAM_GRID_15MIN",
     "BacktestEngine",
     "BacktestResult",
     "Trade",

@@ -3,6 +3,7 @@
 Usage:
     python run.py                        # fetches live data from Yahoo Finance
     python run.py --timeframes daily weekly 5min
+    python run.py --timeframes 15min     # uses 15min-specific parameters
 """
 
 import argparse
@@ -10,32 +11,60 @@ import os
 import pandas as pd
 
 from backtester.data import fetch_nifty50, TIMEFRAMES
-from backtester.strategy import VolumeStrategy
+from backtester.strategy import (
+    VolumeStrategy, get_defaults,
+    PARAM_GRID, ENGINE_PARAM_GRID,
+    PARAM_GRID_15MIN, ENGINE_PARAM_GRID_15MIN,
+)
 from backtester.engine import BacktestEngine
 from backtester.optimizer import run_optimization
 from backtester.missed_trades import find_missed_trades
 from backtester.report import format_report, export_csv, build_trade_log
 
 
+def _grids_for_timeframe(tf: str):
+    """Return (strategy_grid, engine_grid) appropriate for the timeframe."""
+    if tf in ("15min", "5min"):
+        return PARAM_GRID_15MIN, ENGINE_PARAM_GRID_15MIN
+    return PARAM_GRID, ENGINE_PARAM_GRID
+
+
 def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     """Run strategy, optimize, find missed trades, export CSV for one timeframe."""
+    defaults = get_defaults(label)
+
     print(f"\n{'='*60}")
     print(f"  TIMEFRAME: {label}  ({len(df)} bars)")
     print(f"  Range: {df.index[0].date()} → {df.index[-1].date()}")
+    print(f"  Defaults: inner_band={defaults['band_multiplier_inner']}, "
+          f"outer_band={defaults['band_multiplier_outer']}, "
+          f"SL={defaults['sl_pct']}%, TP={defaults['tp_pct']}%")
     print(f"{'='*60}")
 
-    # --- 1. Default-param run (wider exits for Nifty50) ---
-    strategy = VolumeStrategy(band_multiplier=2.0, obv_lookback=5, ad_lookback=5)
+    # --- 1. Default-param run (timeframe-aware) ---
+    strategy = VolumeStrategy(
+        band_multiplier_inner=defaults["band_multiplier_inner"],
+        band_multiplier_outer=defaults["band_multiplier_outer"],
+        obv_lookback=defaults["obv_lookback"],
+        ad_lookback=defaults["ad_lookback"],
+    )
     signals = strategy.generate_signals(df)
-    engine = BacktestEngine(sl_pct=3.0, tsl_pct=2.0, tp_pct=5.0, ttp_pct=1.5)
+    engine = BacktestEngine(
+        sl_pct=defaults["sl_pct"],
+        tsl_pct=defaults["tsl_pct"],
+        tp_pct=defaults["tp_pct"],
+        ttp_pct=defaults["ttp_pct"],
+    )
     result = engine.run(signals)
 
     print("\n--- Default params run ---")
     print(format_report(result))
 
-    # --- 2. Optimizer ---
+    # --- 2. Optimizer (timeframe-aware grids) ---
+    strat_grid, eng_grid = _grids_for_timeframe(label)
     print("\n--- Optimizer (finding best params) ---")
-    opt_results = run_optimization(df, min_trades=3)
+    opt_results = run_optimization(df, strategy_grid=strat_grid,
+                                    engine_grid=eng_grid, min_trades=3)
     if not opt_results.empty:
         print(f"  Tested {len(opt_results)} valid combos")
         top5 = opt_results.head(5)
@@ -43,7 +72,8 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         print(top5.to_string(index=False))
 
         bp = opt_results.iloc[0].to_dict()
-        print(f"\n  BEST: band={bp.get('band_multiplier', 2.0)}, "
+        print(f"\n  BEST: inner_band={bp.get('band_multiplier_inner')}, "
+              f"outer_band={bp.get('band_multiplier_outer')}, "
               f"obv_lb={int(bp['obv_lookback'])}, ad_lb={int(bp['ad_lookback'])}, "
               f"SL={bp['sl_pct']}%, TSL={bp['tsl_pct']}%, "
               f"TP={bp['tp_pct']}%, TTP={bp['ttp_pct']}%")
@@ -52,7 +82,8 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
 
         # Run with best params
         best_strat = VolumeStrategy(
-            band_multiplier=bp.get("band_multiplier", 2.0),
+            band_multiplier_inner=bp.get("band_multiplier_inner", 1.0),
+            band_multiplier_outer=bp.get("band_multiplier_outer", 2.0),
             obv_lookback=int(bp["obv_lookback"]),
             ad_lookback=int(bp["ad_lookback"]),
         )
@@ -81,8 +112,14 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     else:
         print("  No combos met min_trades threshold.")
 
-    # --- 3. Missed trades ---
-    missed = find_missed_trades(df, band_multiplier=2.0, obv_lookback=5, ad_lookback=5)
+    # --- 3. Missed trades (timeframe-aware) ---
+    missed = find_missed_trades(
+        df,
+        band_multiplier_inner=defaults["band_multiplier_inner"],
+        band_multiplier_outer=defaults["band_multiplier_outer"],
+        obv_lookback=defaults["obv_lookback"],
+        ad_lookback=defaults["ad_lookback"],
+    )
     print(f"\n--- Missed Trades ({len(missed)} near-misses) ---")
     if not missed.empty:
         print(missed.head(10).to_string(index=False))

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import pytest
 
-from backtester.strategy import VolumeStrategy, PARAM_GRID
+from backtester.strategy import VolumeStrategy, PARAM_GRID, TIMEFRAME_DEFAULTS, get_defaults
 
 
 class TestVolumeStrategy:
@@ -11,8 +11,10 @@ class TestVolumeStrategy:
         result = strat.generate_signals(sample_ohlcv)
         assert "signal" in result.columns
         assert "vwap" in result.columns
-        assert "vwap_upper" in result.columns
-        assert "vwap_lower" in result.columns
+        assert "vwap_upper_inner" in result.columns
+        assert "vwap_upper_outer" in result.columns
+        assert "vwap_lower_inner" in result.columns
+        assert "vwap_lower_outer" in result.columns
         assert "obv" in result.columns
         assert "ad_line" in result.columns
 
@@ -40,7 +42,8 @@ class TestVolumeStrategy:
             },
             index=dates,
         )
-        strat = VolumeStrategy(band_multiplier=1.0, obv_lookback=3, ad_lookback=3)
+        strat = VolumeStrategy(band_multiplier_inner=0.5, band_multiplier_outer=1.0,
+                                obv_lookback=3, ad_lookback=3)
         result = strat.generate_signals(df)
         assert len(result) == 10
         assert "signal" in result.columns
@@ -58,20 +61,32 @@ class TestVolumeStrategy:
             },
             index=dates,
         )
-        strat = VolumeStrategy(band_multiplier=1.0, obv_lookback=3, ad_lookback=3)
+        strat = VolumeStrategy(band_multiplier_inner=0.5, band_multiplier_outer=1.0,
+                                obv_lookback=3, ad_lookback=3)
         result = strat.generate_signals(df)
         assert len(result) == 10
 
-    def test_band_multiplier_affects_signals(self, sample_ohlcv):
-        """Tighter bands (lower multiplier) → more band touches → more signals."""
-        strat_tight = VolumeStrategy(band_multiplier=0.5, obv_lookback=3, ad_lookback=3)
-        strat_wide = VolumeStrategy(band_multiplier=3.0, obv_lookback=3, ad_lookback=3)
+    def test_inner_band_multiplier_affects_signals(self, sample_ohlcv):
+        """Tighter inner bands (lower multiplier) → more band touches → more signals."""
+        strat_tight = VolumeStrategy(band_multiplier_inner=0.3, band_multiplier_outer=1.0,
+                                      obv_lookback=3, ad_lookback=3)
+        strat_wide = VolumeStrategy(band_multiplier_inner=2.0, band_multiplier_outer=3.0,
+                                     obv_lookback=3, ad_lookback=3)
         r_tight = strat_tight.generate_signals(sample_ohlcv)
         r_wide = strat_wide.generate_signals(sample_ohlcv)
         assert r_tight["signal"].abs().sum() >= r_wide["signal"].abs().sum()
 
+    def test_dual_bands_present(self, sample_ohlcv):
+        """Both inner and outer band columns should be present and different."""
+        strat = VolumeStrategy(band_multiplier_inner=1.0, band_multiplier_outer=2.0)
+        result = strat.generate_signals(sample_ohlcv)
+        # After first bar, inner and outer should differ
+        assert not (result["vwap_upper_inner"].iloc[2:] == result["vwap_upper_outer"].iloc[2:]).all()
+        assert not (result["vwap_lower_inner"].iloc[2:] == result["vwap_lower_outer"].iloc[2:]).all()
+
     def test_confirmation_requires_volume(self, sample_ohlcv):
-        strat = VolumeStrategy(band_multiplier=1.0, obv_lookback=19, ad_lookback=19)
+        strat = VolumeStrategy(band_multiplier_inner=0.5, band_multiplier_outer=1.0,
+                                obv_lookback=19, ad_lookback=19)
         result = strat.generate_signals(sample_ohlcv)
         assert "signal" in result.columns
 
@@ -93,21 +108,57 @@ class TestIterParamSets:
     def test_default_grid_count(self):
         combos = list(VolumeStrategy.iter_param_sets())
         expected = (
-            len(PARAM_GRID["band_multiplier"])
+            len(PARAM_GRID["band_multiplier_inner"])
+            * len(PARAM_GRID["band_multiplier_outer"])
             * len(PARAM_GRID["obv_lookback"])
             * len(PARAM_GRID["ad_lookback"])
         )
         assert len(combos) == expected
 
     def test_custom_grid(self):
-        grid = {"band_multiplier": [1.0], "obv_lookback": [3, 5], "ad_lookback": [10]}
+        grid = {"band_multiplier_inner": [0.5], "band_multiplier_outer": [1.5],
+                "obv_lookback": [3, 5], "ad_lookback": [10]}
         combos = list(VolumeStrategy.iter_param_sets(grid))
         assert len(combos) == 2
-        assert combos[0] == {"band_multiplier": 1.0, "obv_lookback": 3, "ad_lookback": 10}
+        assert combos[0] == {"band_multiplier_inner": 0.5, "band_multiplier_outer": 1.5,
+                              "obv_lookback": 3, "ad_lookback": 10}
 
     def test_each_combo_is_dict(self):
         for combo in VolumeStrategy.iter_param_sets():
             assert isinstance(combo, dict)
-            assert "band_multiplier" in combo
+            assert "band_multiplier_inner" in combo
+            assert "band_multiplier_outer" in combo
             assert "obv_lookback" in combo
             assert "ad_lookback" in combo
+
+
+class TestTimeframeDefaults:
+    def test_get_defaults_daily(self):
+        d = get_defaults("daily")
+        assert d["band_multiplier_inner"] == 1.0
+        assert d["band_multiplier_outer"] == 2.0
+        assert d["sl_pct"] == 3.0
+
+    def test_get_defaults_15min(self):
+        d = get_defaults("15min")
+        assert d["band_multiplier_inner"] == 0.5
+        assert d["band_multiplier_outer"] == 1.5
+        assert d["sl_pct"] == 0.5
+        assert d["tp_pct"] == 1.0
+
+    def test_get_defaults_unknown_falls_back_to_daily(self):
+        d = get_defaults("unknown")
+        assert d == get_defaults("daily")
+
+    def test_all_timeframes_have_required_keys(self):
+        required = {"band_multiplier_inner", "band_multiplier_outer",
+                     "obv_lookback", "ad_lookback",
+                     "sl_pct", "tsl_pct", "tp_pct", "ttp_pct"}
+        for tf, defaults in TIMEFRAME_DEFAULTS.items():
+            assert required.issubset(set(defaults.keys())), f"{tf} missing keys"
+
+    def test_get_defaults_returns_copy(self):
+        d1 = get_defaults("daily")
+        d1["sl_pct"] = 999
+        d2 = get_defaults("daily")
+        assert d2["sl_pct"] != 999

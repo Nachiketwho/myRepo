@@ -14,7 +14,8 @@ class TestFindMissedTrades:
         result = find_missed_trades(sample_ohlcv)
         if not result.empty:
             expected_cols = {
-                "date", "close", "vwap", "vwap_upper", "vwap_lower",
+                "date", "close", "vwap", "vwap_upper_inner", "vwap_upper_outer",
+                "vwap_lower_inner", "vwap_lower_outer",
                 "obv", "ad_line", "met_conditions", "missed_condition",
                 "direction",
             }
@@ -42,9 +43,11 @@ class TestFindMissedTrades:
         assert isinstance(r3, pd.DataFrame)
         assert isinstance(r14, pd.DataFrame)
 
-    def test_band_multiplier(self, sample_ohlcv):
-        r_tight = find_missed_trades(sample_ohlcv, band_multiplier=0.5)
-        r_wide = find_missed_trades(sample_ohlcv, band_multiplier=3.0)
+    def test_dual_band_multipliers(self, sample_ohlcv):
+        r_tight = find_missed_trades(sample_ohlcv, band_multiplier_inner=0.3,
+                                      band_multiplier_outer=0.8)
+        r_wide = find_missed_trades(sample_ohlcv, band_multiplier_inner=2.0,
+                                     band_multiplier_outer=3.0)
         assert isinstance(r_tight, pd.DataFrame)
         assert isinstance(r_wide, pd.DataFrame)
 

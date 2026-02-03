@@ -54,42 +54,56 @@ class TestVWAP:
 
 
 class TestVWAPBands:
-    def test_returns_three_series(self, sample_ohlcv):
-        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
+    def test_returns_five_series(self, sample_ohlcv):
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv)
         assert isinstance(vwap_line, pd.Series)
-        assert isinstance(upper, pd.Series)
-        assert isinstance(lower, pd.Series)
+        assert isinstance(ui, pd.Series)
+        assert isinstance(uo, pd.Series)
+        assert isinstance(li, pd.Series)
+        assert isinstance(lo, pd.Series)
         assert len(vwap_line) == len(sample_ohlcv)
 
+    def test_outer_wider_than_inner(self, sample_ohlcv):
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv)
+        # Outer upper >= inner upper, outer lower <= inner lower
+        assert (uo.iloc[1:] >= ui.iloc[1:] - 1e-9).all()
+        assert (lo.iloc[1:] <= li.iloc[1:] + 1e-9).all()
+
     def test_upper_above_vwap(self, sample_ohlcv):
-        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
-        assert (upper.iloc[1:] >= vwap_line.iloc[1:] - 1e-9).all()
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv)
+        assert (ui.iloc[1:] >= vwap_line.iloc[1:] - 1e-9).all()
+        assert (uo.iloc[1:] >= vwap_line.iloc[1:] - 1e-9).all()
 
     def test_lower_below_vwap(self, sample_ohlcv):
-        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
-        assert (lower.iloc[1:] <= vwap_line.iloc[1:] + 1e-9).all()
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv)
+        assert (li.iloc[1:] <= vwap_line.iloc[1:] + 1e-9).all()
+        assert (lo.iloc[1:] <= vwap_line.iloc[1:] + 1e-9).all()
 
     def test_first_bar_bands_equal_vwap(self):
-        """First bar: std=0, so bands == vwap."""
+        """First bar: std=0, so all bands == vwap."""
         df = pd.DataFrame(
             {"high": [110], "low": [90], "close": [100], "volume": [500]},
             index=pd.date_range("2024-01-01", periods=1),
         )
-        vwap_line, upper, lower = vwap_bands(df)
-        assert pytest.approx(upper.iloc[0]) == vwap_line.iloc[0]
-        assert pytest.approx(lower.iloc[0]) == vwap_line.iloc[0]
+        vwap_line, ui, uo, li, lo = vwap_bands(df)
+        assert pytest.approx(ui.iloc[0]) == vwap_line.iloc[0]
+        assert pytest.approx(uo.iloc[0]) == vwap_line.iloc[0]
+        assert pytest.approx(li.iloc[0]) == vwap_line.iloc[0]
+        assert pytest.approx(lo.iloc[0]) == vwap_line.iloc[0]
 
     def test_multiplier_widens_bands(self, sample_ohlcv):
-        _, upper1, lower1 = vwap_bands(sample_ohlcv, multiplier=1.0)
-        _, upper2, lower2 = vwap_bands(sample_ohlcv, multiplier=2.0)
-        assert (upper2.iloc[1:] >= upper1.iloc[1:] - 1e-9).all()
-        assert (lower2.iloc[1:] <= lower1.iloc[1:] + 1e-9).all()
+        _, ui1, _, li1, _ = vwap_bands(sample_ohlcv, multiplier_inner=1.0, multiplier_outer=2.0)
+        _, ui2, _, li2, _ = vwap_bands(sample_ohlcv, multiplier_inner=2.0, multiplier_outer=3.0)
+        assert (ui2.iloc[1:] >= ui1.iloc[1:] - 1e-9).all()
+        assert (li2.iloc[1:] <= li1.iloc[1:] + 1e-9).all()
 
     def test_flat_prices_zero_std(self, flat_ohlcv):
-        """Flat prices → std=0 → bands collapse to vwap."""
-        vwap_line, upper, lower = vwap_bands(flat_ohlcv)
-        np.testing.assert_array_almost_equal(upper.values, vwap_line.values)
-        np.testing.assert_array_almost_equal(lower.values, vwap_line.values)
+        """Flat prices → std=0 → all bands collapse to vwap."""
+        vwap_line, ui, uo, li, lo = vwap_bands(flat_ohlcv)
+        np.testing.assert_array_almost_equal(ui.values, vwap_line.values)
+        np.testing.assert_array_almost_equal(uo.values, vwap_line.values)
+        np.testing.assert_array_almost_equal(li.values, vwap_line.values)
+        np.testing.assert_array_almost_equal(lo.values, vwap_line.values)
 
     def test_non_datetime_index(self):
         df = pd.DataFrame(
@@ -101,9 +115,18 @@ class TestVWAPBands:
             },
             index=[0, 1, 2],
         )
-        vwap_line, upper, lower = vwap_bands(df, multiplier=1.0)
+        vwap_line, ui, uo, li, lo = vwap_bands(df, multiplier_inner=1.0, multiplier_outer=2.0)
         assert len(vwap_line) == 3
-        assert upper.iloc[1] > lower.iloc[1]
+        assert uo.iloc[1] > lo.iloc[1]
+
+    def test_inner_and_outer_different(self, sample_ohlcv):
+        """Inner and outer bands should differ when multipliers differ."""
+        vwap_line, ui, uo, li, lo = vwap_bands(
+            sample_ohlcv, multiplier_inner=1.0, multiplier_outer=2.0
+        )
+        # After first bar (where std=0), they should differ
+        assert not (ui.iloc[2:] == uo.iloc[2:]).all()
+        assert not (li.iloc[2:] == lo.iloc[2:]).all()
 
 
 class TestOBV:

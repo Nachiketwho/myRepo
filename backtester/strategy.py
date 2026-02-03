@@ -3,9 +3,79 @@ import pandas as pd
 from backtester.indicators import vwap_bands, obv, ad_line
 
 
-# Default parameter grids — wider exits for Nifty50 daily volatility
+# ---------------------------------------------------------------------------
+# Timeframe-aware defaults
+# ---------------------------------------------------------------------------
+# Daily: wider bands, longer lookbacks, wider exits (1-2% ATR)
+# 15min/5min: tighter everything for intraday moves (~0.3-0.8% per bar)
+# ---------------------------------------------------------------------------
+
+TIMEFRAME_DEFAULTS = {
+    "daily": {
+        "band_multiplier_inner": 1.0,
+        "band_multiplier_outer": 2.0,
+        "obv_lookback": 5,
+        "ad_lookback": 5,
+        "sl_pct": 3.0,
+        "tsl_pct": 2.0,
+        "tp_pct": 5.0,
+        "ttp_pct": 1.5,
+    },
+    "weekly": {
+        "band_multiplier_inner": 1.5,
+        "band_multiplier_outer": 2.5,
+        "obv_lookback": 5,
+        "ad_lookback": 5,
+        "sl_pct": 5.0,
+        "tsl_pct": 3.0,
+        "tp_pct": 8.0,
+        "ttp_pct": 2.0,
+    },
+    "hourly": {
+        "band_multiplier_inner": 0.8,
+        "band_multiplier_outer": 1.5,
+        "obv_lookback": 4,
+        "ad_lookback": 4,
+        "sl_pct": 1.0,
+        "tsl_pct": 0.6,
+        "tp_pct": 2.0,
+        "ttp_pct": 0.5,
+    },
+    "15min": {
+        "band_multiplier_inner": 0.5,
+        "band_multiplier_outer": 1.5,
+        "obv_lookback": 3,
+        "ad_lookback": 3,
+        "sl_pct": 0.5,
+        "tsl_pct": 0.3,
+        "tp_pct": 1.0,
+        "ttp_pct": 0.3,
+    },
+    "5min": {
+        "band_multiplier_inner": 0.5,
+        "band_multiplier_outer": 1.2,
+        "obv_lookback": 3,
+        "ad_lookback": 3,
+        "sl_pct": 0.3,
+        "tsl_pct": 0.2,
+        "tp_pct": 0.8,
+        "ttp_pct": 0.2,
+    },
+}
+
+
+def get_defaults(timeframe: str = "daily") -> dict:
+    """Return default parameters for a given timeframe."""
+    return TIMEFRAME_DEFAULTS.get(timeframe, TIMEFRAME_DEFAULTS["daily"]).copy()
+
+
+# ---------------------------------------------------------------------------
+# Parameter grids (default = daily-oriented)
+# ---------------------------------------------------------------------------
+
 PARAM_GRID = {
-    "band_multiplier": [1.0, 1.5, 2.0],
+    "band_multiplier_inner": [0.5, 1.0, 1.5],
+    "band_multiplier_outer": [1.5, 2.0, 2.5],
     "obv_lookback": [3, 5, 10, 14, 20],
     "ad_lookback": [3, 5, 10, 14, 20],
 }
@@ -17,58 +87,92 @@ ENGINE_PARAM_GRID = {
     "ttp_pct": [1.0, 1.5, 2.0],
 }
 
+# 15min-specific grids — tighter ranges for intraday
+PARAM_GRID_15MIN = {
+    "band_multiplier_inner": [0.3, 0.5, 0.8],
+    "band_multiplier_outer": [1.0, 1.5, 2.0],
+    "obv_lookback": [2, 3, 5],
+    "ad_lookback": [2, 3, 5],
+}
+
+ENGINE_PARAM_GRID_15MIN = {
+    "sl_pct": [0.3, 0.5, 0.8],
+    "tsl_pct": [0.2, 0.3, 0.5],
+    "tp_pct": [0.5, 1.0, 1.5],
+    "ttp_pct": [0.2, 0.3, 0.5],
+}
+
 
 class VolumeStrategy:
-    """VWAP-band bounce strategy with volume confirmation.
+    """VWAP dual-band bounce strategy with volume confirmation.
+
+    Uses two sets of bands:
+        - Inner bands (1st std dev): frequent touches, initial S/R level
+        - Outer bands (2nd std dev): strong S/R, higher conviction entries
 
     Factors (priority order):
         1. PRIMARY — VWAP band bounce:
-           - Buy zone:  price touches/dips to lower band and bounces
-                         (low <= lower_band AND close > lower_band)
-           - Sell zone:  price touches/rises to upper band and rejects
-                         (high >= upper_band AND close < upper_band)
+           - Buy zone:  price touches/dips to inner OR outer lower band
+                         and bounces (low <= band AND close > band)
+           - Sell zone:  price touches/rises to inner OR outer upper band
+                         and rejects (high >= band AND close < band)
 
         2. CONFIRMATION — at least 1 of 2 must confirm:
            - OBV rising over lookback period (volume supports direction)
            - A/D Line rising over lookback period (money flow supports)
-
-    This replaces the old 3-of-3 cross logic which missed trend trades.
     """
 
     def __init__(
         self,
-        band_multiplier: float = 2.0,
+        band_multiplier_inner: float = 1.0,
+        band_multiplier_outer: float = 2.0,
         obv_lookback: int = 5,
         ad_lookback: int = 5,
     ):
-        self.band_multiplier = band_multiplier
+        self.band_multiplier_inner = band_multiplier_inner
+        self.band_multiplier_outer = band_multiplier_outer
         self.obv_lookback = obv_lookback
         self.ad_lookback = ad_lookback
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """Return a copy of *df* with indicator and signal columns.
 
-        Added columns: vwap, vwap_upper, vwap_lower, obv, ad_line, signal.
+        Added columns: vwap, vwap_upper_inner, vwap_upper_outer,
+                        vwap_lower_inner, vwap_lower_outer,
+                        obv, ad_line, signal.
         signal: 1=buy, -1=sell, 0=hold.
         """
         result = df.copy()
 
-        vwap_line, upper, lower = vwap_bands(df, self.band_multiplier)
+        vwap_line, upper_inner, upper_outer, lower_inner, lower_outer = vwap_bands(
+            df, self.band_multiplier_inner, self.band_multiplier_outer
+        )
         result["vwap"] = vwap_line
-        result["vwap_upper"] = upper
-        result["vwap_lower"] = lower
+        result["vwap_upper_inner"] = upper_inner
+        result["vwap_upper_outer"] = upper_outer
+        result["vwap_lower_inner"] = lower_inner
+        result["vwap_lower_outer"] = lower_outer
         result["obv"] = obv(df)
         result["ad_line"] = ad_line(df)
 
-        # --- Primary: VWAP band bounce ---
-        # Buy: price touched lower band and bounced (closed above it)
-        buy_bounce = (result["low"] <= result["vwap_lower"]) & (
-            result["close"] > result["vwap_lower"]
+        # --- Primary: VWAP band bounce (inner OR outer) ---
+        # Buy: price touched lower band (inner or outer) and bounced
+        buy_inner = (result["low"] <= result["vwap_lower_inner"]) & (
+            result["close"] > result["vwap_lower_inner"]
         )
-        # Sell: price touched upper band and rejected (closed below it)
-        sell_reject = (result["high"] >= result["vwap_upper"]) & (
-            result["close"] < result["vwap_upper"]
+        buy_outer = (result["low"] <= result["vwap_lower_outer"]) & (
+            result["close"] > result["vwap_lower_outer"]
         )
+        buy_bounce = buy_inner | buy_outer
+
+        # Sell: price touched upper band (inner or outer) and rejected
+        sell_inner = (result["high"] >= result["vwap_upper_inner"]) & (
+            result["close"] < result["vwap_upper_inner"]
+        )
+        sell_outer = (result["high"] >= result["vwap_upper_outer"]) & (
+            result["close"] < result["vwap_upper_outer"]
+        )
+        sell_reject = sell_inner | sell_outer
 
         # --- Confirmation: at least 1 of 2 ---
         obv_rising = result["obv"] > result["obv"].shift(self.obv_lookback)

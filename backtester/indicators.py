@@ -23,16 +23,17 @@ def vwap(df: pd.DataFrame) -> pd.Series:
 
 
 def vwap_bands(
-    df: pd.DataFrame, multiplier: float = 2.0
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """VWAP with upper and lower standard-deviation bands.
+    df: pd.DataFrame,
+    multiplier_inner: float = 1.0,
+    multiplier_outer: float = 2.0,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """VWAP with dual upper and dual lower standard-deviation bands.
 
-    Lower band = dynamic support, upper band = dynamic resistance.
-    Price bouncing off lower band with volume confirmation = buy.
-    Price rejecting at upper band with volume confirmation = sell.
+    Inner bands (1st level support/resistance) — more frequent touches.
+    Outer bands (2nd level support/resistance) — stronger S/R zones.
 
     Returns:
-        (vwap_line, upper_band, lower_band)
+        (vwap_line, upper_inner, upper_outer, lower_inner, lower_outer)
     """
     typical_price = (df["high"] + df["low"] + df["close"]) / 3
     tp_volume = typical_price * df["volume"]
@@ -54,9 +55,11 @@ def vwap_bands(
     variance = cum_sq_diff_vol / cum_vol
     std = variance ** 0.5
 
-    upper = vwap_line + multiplier * std
-    lower = vwap_line - multiplier * std
-    return vwap_line, upper, lower
+    upper_inner = vwap_line + multiplier_inner * std
+    upper_outer = vwap_line + multiplier_outer * std
+    lower_inner = vwap_line - multiplier_inner * std
+    lower_outer = vwap_line - multiplier_outer * std
+    return vwap_line, upper_inner, upper_outer, lower_inner, lower_outer
 
 
 def obv(df: pd.DataFrame) -> pd.Series:
