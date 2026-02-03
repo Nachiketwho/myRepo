@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from backtester.engine import BacktestEngine, BacktestResult, Trade, ExitReason
-from backtester.report import build_trade_log, build_summary, format_report
+from backtester.report import build_trade_log, build_summary, format_report, export_csv
 
 
 @pytest.fixture
@@ -108,3 +108,51 @@ class TestFormatReport:
         r = BacktestResult(trades=[], equity_curve=pd.Series(dtype=float))
         text = format_report(r)
         assert "Total trades" in text
+
+
+class TestExportCSV:
+    def test_creates_trade_log_csv(self, sample_result, tmp_path):
+        tl = tmp_path / "trades.csv"
+        sm = tmp_path / "summary.csv"
+        export_csv(sample_result, str(tl), str(sm))
+
+        df = pd.read_csv(tl)
+        assert len(df) == 2
+        assert "entry_price" in df.columns
+
+    def test_creates_summary_csv(self, sample_result, tmp_path):
+        tl = tmp_path / "trades.csv"
+        sm = tmp_path / "summary.csv"
+        export_csv(sample_result, str(tl), str(sm))
+
+        df = pd.read_csv(sm)
+        assert len(df) == 1
+        assert "total_trades" in df.columns
+        assert df.iloc[0]["total_trades"] == 2
+
+    def test_summary_has_flattened_exit_counts(self, sample_result, tmp_path):
+        tl = tmp_path / "trades.csv"
+        sm = tmp_path / "summary.csv"
+        export_csv(sample_result, str(tl), str(sm))
+
+        df = pd.read_csv(sm)
+        assert "exits_take_profit" in df.columns
+        assert "exits_stop_loss" in df.columns
+
+    def test_summary_has_params(self, sample_result, tmp_path):
+        tl = tmp_path / "trades.csv"
+        sm = tmp_path / "summary.csv"
+        export_csv(sample_result, str(tl), str(sm))
+
+        df = pd.read_csv(sm)
+        assert "param_sl_pct" in df.columns
+        assert df.iloc[0]["param_sl_pct"] == 2.0
+
+    def test_empty_result(self, tmp_path):
+        r = BacktestResult(trades=[], equity_curve=pd.Series(dtype=float))
+        tl = tmp_path / "trades.csv"
+        sm = tmp_path / "summary.csv"
+        export_csv(r, str(tl), str(sm))
+
+        assert tl.exists()
+        assert len(pd.read_csv(sm)) == 1

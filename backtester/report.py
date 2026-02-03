@@ -81,3 +81,28 @@ def format_report(result: BacktestResult) -> str:
 
     lines.append("=" * 50)
     return "\n".join(lines)
+
+
+def export_csv(
+    result: BacktestResult,
+    trade_log_path: str = "trade_log.csv",
+    summary_path: str = "summary.csv",
+) -> None:
+    """Export trade log and summary to CSV files.
+
+    Args:
+        result: BacktestResult from engine.run().
+        trade_log_path: File path for trade-level CSV.
+        summary_path: File path for summary stats CSV.
+    """
+    build_trade_log(result).to_csv(trade_log_path, index=False)
+
+    s = build_summary(result)
+    # Flatten exit_reason_counts and params into the summary row
+    flat = {k: v for k, v in s.items() if k not in ("exit_reason_counts", "params")}
+    for reason, count in s["exit_reason_counts"].items():
+        flat[f"exits_{reason}"] = count
+    for k, v in s["params"].items():
+        flat[f"param_{k}"] = v
+
+    pd.DataFrame([flat]).to_csv(summary_path, index=False)
