@@ -8,6 +8,7 @@ TIMEFRAMES = {
     "weekly": "1wk",
     "hourly": "1h",
     "15min": "15m",
+    "5min": "5m",
 }
 
 # Yahoo Finance limits history for intraday intervals
@@ -16,6 +17,7 @@ PERIOD_DEFAULTS = {
     "weekly": "10y",
     "hourly": "2y",
     "15min": "60d",
+    "5min": "60d",
 }
 
 
