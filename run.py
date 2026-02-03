@@ -32,12 +32,14 @@ def _grids_for_timeframe(tf: str):
 def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     """Run strategy, optimize, find missed trades, export CSV for one timeframe."""
     defaults = get_defaults(label)
+    vwap_win = defaults.get("vwap_window")
 
     print(f"\n{'='*60}")
     print(f"  TIMEFRAME: {label}  ({len(df)} bars)")
     print(f"  Range: {df.index[0].date()} → {df.index[-1].date()}")
     print(f"  Defaults: inner_band={defaults['band_multiplier_inner']}, "
           f"outer_band={defaults['band_multiplier_outer']}, "
+          f"vwap_window={vwap_win}, "
           f"SL={defaults['sl_pct']}%, TP={defaults['tp_pct']}%")
     print(f"{'='*60}")
 
@@ -45,6 +47,7 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     strategy = VolumeStrategy(
         band_multiplier_inner=defaults["band_multiplier_inner"],
         band_multiplier_outer=defaults["band_multiplier_outer"],
+        vwap_window=vwap_win,
         obv_lookback=defaults["obv_lookback"],
         ad_lookback=defaults["ad_lookback"],
     )
@@ -64,7 +67,8 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     strat_grid, eng_grid = _grids_for_timeframe(label)
     print("\n--- Optimizer (finding best params) ---")
     opt_results = run_optimization(df, strategy_grid=strat_grid,
-                                    engine_grid=eng_grid, min_trades=3)
+                                    engine_grid=eng_grid, min_trades=3,
+                                    vwap_window=vwap_win)
     if not opt_results.empty:
         print(f"  Tested {len(opt_results)} valid combos")
         top5 = opt_results.head(5)
@@ -84,6 +88,7 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         best_strat = VolumeStrategy(
             band_multiplier_inner=bp.get("band_multiplier_inner", 1.0),
             band_multiplier_outer=bp.get("band_multiplier_outer", 2.0),
+            vwap_window=vwap_win,
             obv_lookback=int(bp["obv_lookback"]),
             ad_lookback=int(bp["ad_lookback"]),
         )
@@ -117,6 +122,7 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         df,
         band_multiplier_inner=defaults["band_multiplier_inner"],
         band_multiplier_outer=defaults["band_multiplier_outer"],
+        rolling_window=vwap_win,
         obv_lookback=defaults["obv_lookback"],
         ad_lookback=defaults["ad_lookback"],
     )

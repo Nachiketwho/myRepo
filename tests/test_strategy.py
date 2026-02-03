@@ -152,13 +152,34 @@ class TestTimeframeDefaults:
 
     def test_all_timeframes_have_required_keys(self):
         required = {"band_multiplier_inner", "band_multiplier_outer",
-                     "obv_lookback", "ad_lookback",
+                     "vwap_window", "obv_lookback", "ad_lookback",
                      "sl_pct", "tsl_pct", "tp_pct", "ttp_pct"}
         for tf, defaults in TIMEFRAME_DEFAULTS.items():
             assert required.issubset(set(defaults.keys())), f"{tf} missing keys"
+
+    def test_intraday_has_rolling_window(self):
+        for tf in ("15min", "5min", "hourly"):
+            d = get_defaults(tf)
+            assert d["vwap_window"] is not None, f"{tf} should use rolling VWAP"
+            assert isinstance(d["vwap_window"], int)
+
+    def test_daily_weekly_no_rolling_window(self):
+        for tf in ("daily", "weekly"):
+            d = get_defaults(tf)
+            assert d["vwap_window"] is None, f"{tf} should use daily-reset VWAP"
 
     def test_get_defaults_returns_copy(self):
         d1 = get_defaults("daily")
         d1["sl_pct"] = 999
         d2 = get_defaults("daily")
         assert d2["sl_pct"] != 999
+
+    def test_vwap_window_passed_to_strategy(self, sample_ohlcv):
+        """Strategy with vwap_window should produce valid signals."""
+        strat = VolumeStrategy(
+            band_multiplier_inner=0.5, band_multiplier_outer=1.5,
+            vwap_window=5, obv_lookback=3, ad_lookback=3,
+        )
+        result = strat.generate_signals(sample_ohlcv)
+        assert "signal" in result.columns
+        assert not result["vwap"].isna().all()

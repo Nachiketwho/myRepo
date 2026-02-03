@@ -7,6 +7,7 @@ def find_missed_trades(
     df: pd.DataFrame,
     band_multiplier_inner: float = 1.0,
     band_multiplier_outer: float = 2.0,
+    rolling_window: int | None = None,
     obv_lookback: int = 5,
     ad_lookback: int = 5,
 ) -> pd.DataFrame:
@@ -27,7 +28,8 @@ def find_missed_trades(
     """
     data = df.copy()
     vwap_line, upper_inner, upper_outer, lower_inner, lower_outer = vwap_bands(
-        df, band_multiplier_inner, band_multiplier_outer
+        df, band_multiplier_inner, band_multiplier_outer,
+        rolling_window=rolling_window,
     )
     data["vwap"] = vwap_line
     data["vwap_upper_inner"] = upper_inner

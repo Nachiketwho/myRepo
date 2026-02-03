@@ -6,14 +6,16 @@ from backtester.indicators import vwap_bands, obv, ad_line
 # ---------------------------------------------------------------------------
 # Timeframe-aware defaults
 # ---------------------------------------------------------------------------
-# Daily: wider bands, longer lookbacks, wider exits (1-2% ATR)
-# 15min/5min: tighter everything for intraday moves (~0.3-0.8% per bar)
+# Daily/weekly: daily-reset VWAP (no rolling window), wider exits
+# Intraday: rolling VWAP window so bands have consistent width,
+#           tighter exits matching smaller bar-to-bar moves
 # ---------------------------------------------------------------------------
 
 TIMEFRAME_DEFAULTS = {
     "daily": {
         "band_multiplier_inner": 1.0,
         "band_multiplier_outer": 2.0,
+        "vwap_window": None,          # daily-reset cumulative
         "obv_lookback": 5,
         "ad_lookback": 5,
         "sl_pct": 3.0,
@@ -24,6 +26,7 @@ TIMEFRAME_DEFAULTS = {
     "weekly": {
         "band_multiplier_inner": 1.5,
         "band_multiplier_outer": 2.5,
+        "vwap_window": None,
         "obv_lookback": 5,
         "ad_lookback": 5,
         "sl_pct": 5.0,
@@ -34,6 +37,7 @@ TIMEFRAME_DEFAULTS = {
     "hourly": {
         "band_multiplier_inner": 0.8,
         "band_multiplier_outer": 1.5,
+        "vwap_window": 20,            # ~20h rolling
         "obv_lookback": 4,
         "ad_lookback": 4,
         "sl_pct": 1.0,
@@ -44,6 +48,7 @@ TIMEFRAME_DEFAULTS = {
     "15min": {
         "band_multiplier_inner": 0.5,
         "band_multiplier_outer": 1.5,
+        "vwap_window": 20,            # 20 bars × 15min = 5h rolling
         "obv_lookback": 3,
         "ad_lookback": 3,
         "sl_pct": 0.5,
@@ -54,6 +59,7 @@ TIMEFRAME_DEFAULTS = {
     "5min": {
         "band_multiplier_inner": 0.5,
         "band_multiplier_outer": 1.2,
+        "vwap_window": 30,            # 30 bars × 5min = 2.5h rolling
         "obv_lookback": 3,
         "ad_lookback": 3,
         "sl_pct": 0.3,
@@ -126,11 +132,13 @@ class VolumeStrategy:
         self,
         band_multiplier_inner: float = 1.0,
         band_multiplier_outer: float = 2.0,
+        vwap_window: int | None = None,
         obv_lookback: int = 5,
         ad_lookback: int = 5,
     ):
         self.band_multiplier_inner = band_multiplier_inner
         self.band_multiplier_outer = band_multiplier_outer
+        self.vwap_window = vwap_window
         self.obv_lookback = obv_lookback
         self.ad_lookback = ad_lookback
 
@@ -145,7 +153,8 @@ class VolumeStrategy:
         result = df.copy()
 
         vwap_line, upper_inner, upper_outer, lower_inner, lower_outer = vwap_bands(
-            df, self.band_multiplier_inner, self.band_multiplier_outer
+            df, self.band_multiplier_inner, self.band_multiplier_outer,
+            rolling_window=self.vwap_window,
         )
         result["vwap"] = vwap_line
         result["vwap_upper_inner"] = upper_inner

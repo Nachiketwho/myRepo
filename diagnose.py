@@ -16,12 +16,14 @@ def diagnose(
     df: pd.DataFrame,
     band_inner: float = 1.0,
     band_outer: float = 2.0,
+    vwap_win: int | None = None,
     obv_lb: int = 5,
     ad_lb: int = 5,
 ):
     strategy = VolumeStrategy(
         band_multiplier_inner=band_inner,
         band_multiplier_outer=band_outer,
+        vwap_window=vwap_win,
         obv_lookback=obv_lb,
         ad_lookback=ad_lb,
     )
@@ -73,7 +75,8 @@ def diagnose(
 
     print()
     print("=" * 70)
-    print(f"  SIGNAL SUMMARY (inner={band_inner}, outer={band_outer})")
+    vwap_mode = f"rolling({vwap_win})" if vwap_win else "daily-reset"
+    print(f"  SIGNAL SUMMARY (inner={band_inner}, outer={band_outer}, vwap={vwap_mode})")
     print("=" * 70)
     print(f"  Total bars:                       {len(s)}")
     print(f"  Buy signals:                      {(s['signal'] == 1).sum()}")
@@ -113,14 +116,16 @@ def main():
     defaults = get_defaults(args.timeframe)
     band_inner = defaults["band_multiplier_inner"]
     band_outer = defaults["band_multiplier_outer"]
+    vwap_win = defaults.get("vwap_window")
     obv_lb = args.obv_lookback or defaults["obv_lookback"]
     ad_lb = args.ad_lookback or defaults["ad_lookback"]
 
     df = fetch_nifty50(timeframe=args.timeframe, period=args.period)
     print(f"\nFetched {len(df)} bars ({args.timeframe}): {df.index[0]} → {df.index[-1]}")
+    vwap_mode = f"rolling({vwap_win})" if vwap_win else "daily-reset"
     print(f"Using: inner_band={band_inner}, outer_band={band_outer}, "
-          f"obv_lb={obv_lb}, ad_lb={ad_lb}\n")
-    diagnose(df, band_inner, band_outer, obv_lb, ad_lb)
+          f"vwap={vwap_mode}, obv_lb={obv_lb}, ad_lb={ad_lb}\n")
+    diagnose(df, band_inner, band_outer, vwap_win, obv_lb, ad_lb)
 
 
 if __name__ == "__main__":

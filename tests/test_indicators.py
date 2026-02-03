@@ -128,6 +128,41 @@ class TestVWAPBands:
         assert not (ui.iloc[2:] == uo.iloc[2:]).all()
         assert not (li.iloc[2:] == lo.iloc[2:]).all()
 
+    def test_rolling_window_returns_five_series(self, sample_ohlcv):
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv, rolling_window=5)
+        assert len(vwap_line) == len(sample_ohlcv)
+        assert not vwap_line.isna().all()
+
+    def test_rolling_window_bands_widen(self, sample_ohlcv):
+        """Rolling mode: outer bands should be wider than inner."""
+        vwap_line, ui, uo, li, lo = vwap_bands(
+            sample_ohlcv, multiplier_inner=1.0, multiplier_outer=2.0, rolling_window=5
+        )
+        assert (uo.iloc[2:] >= ui.iloc[2:] - 1e-9).all()
+        assert (lo.iloc[2:] <= li.iloc[2:] + 1e-9).all()
+
+    def test_rolling_window_no_nan_after_warmup(self, sample_ohlcv):
+        """After window warmup, no NaN values."""
+        vwap_line, ui, uo, li, lo = vwap_bands(sample_ohlcv, rolling_window=5)
+        assert not vwap_line.iloc[4:].isna().any()
+        assert not ui.iloc[4:].isna().any()
+
+    def test_zero_volume_handled(self):
+        """Zero volume bars should not produce NaN bands."""
+        df = pd.DataFrame(
+            {
+                "high": [110, 120, 115, 118, 112],
+                "low": [90, 100, 95, 98, 92],
+                "close": [100, 110, 105, 108, 102],
+                "volume": [0, 0, 0, 0, 0],
+            },
+            index=pd.date_range("2024-01-01", periods=5),
+        )
+        vwap_line, ui, uo, li, lo = vwap_bands(df, rolling_window=3)
+        # Zero volume replaced with 1, so should produce valid numbers
+        assert not vwap_line.isna().any()
+        assert not ui.isna().any()
+
 
 class TestOBV:
     def test_first_bar_is_zero(self, sample_ohlcv):

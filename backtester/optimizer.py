@@ -31,20 +31,23 @@ def run_optimization(
     strategy_grid: dict | None = None,
     engine_grid: dict | None = None,
     min_trades: int = 5,
+    vwap_window: int | None = None,
 ) -> pd.DataFrame:
     """Grid-search over strategy + engine params.
 
+    Args:
+        vwap_window: Rolling window for VWAP band calculation.
+            Pass the timeframe-appropriate value (e.g. 20 for 15min).
+
     Returns a DataFrame sorted by total_pnl descending with one row per
     parameter combination, filtered to at least *min_trades*.
-
-    Columns: all param keys + num_trades, total_pnl, win_rate, profit_factor,
-    max_drawdown.
     """
     combos = _build_combos(strategy_grid, engine_grid)
     rows: list[dict] = []
 
     for combo in combos:
         strat_params = {k: combo[k] for k in STRAT_PARAM_KEYS if k in combo}
+        strat_params["vwap_window"] = vwap_window
         engine_params = {k: combo[k] for k in ENGINE_PARAM_KEYS if k in combo}
 
         strategy = VolumeStrategy(**strat_params)
@@ -78,9 +81,11 @@ def best_params(
     strategy_grid: dict | None = None,
     engine_grid: dict | None = None,
     min_trades: int = 5,
+    vwap_window: int | None = None,
 ) -> dict:
     """Return the single best parameter set (highest profit, ≥ min_trades)."""
-    results = run_optimization(df, strategy_grid, engine_grid, min_trades)
+    results = run_optimization(df, strategy_grid, engine_grid, min_trades,
+                                vwap_window=vwap_window)
     if results.empty:
         return {}
     return results.iloc[0].to_dict()

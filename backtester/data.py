@@ -67,4 +67,10 @@ def fetch_nifty50(
     df.columns = [c.lower() for c in df.columns]
     df = df[["open", "high", "low", "close", "volume"]]
     df.index.name = "date"
+
+    # Yahoo Finance returns 0 volume for some indices on intraday
+    # timeframes.  Replace with 1 so VWAP/OBV/AD don't produce NaN / 0.
+    if (df["volume"] == 0).all():
+        df["volume"] = 1
+
     return df
