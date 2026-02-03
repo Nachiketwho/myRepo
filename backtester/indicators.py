@@ -22,6 +22,43 @@ def vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol
 
 
+def vwap_bands(
+    df: pd.DataFrame, multiplier: float = 2.0
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """VWAP with upper and lower standard-deviation bands.
+
+    Lower band = dynamic support, upper band = dynamic resistance.
+    Price bouncing off lower band with volume confirmation = buy.
+    Price rejecting at upper band with volume confirmation = sell.
+
+    Returns:
+        (vwap_line, upper_band, lower_band)
+    """
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    tp_volume = typical_price * df["volume"]
+
+    if isinstance(df.index, pd.DatetimeIndex):
+        dates = df.index.date
+        cum_tp_vol = tp_volume.groupby(dates).cumsum()
+        cum_vol = df["volume"].groupby(dates).cumsum()
+        vwap_line = cum_tp_vol / cum_vol
+        sq_diff_vol = ((typical_price - vwap_line) ** 2) * df["volume"]
+        cum_sq_diff_vol = sq_diff_vol.groupby(dates).cumsum()
+    else:
+        cum_tp_vol = tp_volume.cumsum()
+        cum_vol = df["volume"].cumsum()
+        vwap_line = cum_tp_vol / cum_vol
+        sq_diff_vol = ((typical_price - vwap_line) ** 2) * df["volume"]
+        cum_sq_diff_vol = sq_diff_vol.cumsum()
+
+    variance = cum_sq_diff_vol / cum_vol
+    std = variance ** 0.5
+
+    upper = vwap_line + multiplier * std
+    lower = vwap_line - multiplier * std
+    return vwap_line, upper, lower
+
+
 def obv(df: pd.DataFrame) -> pd.Series:
     """On Balance Volume.
 

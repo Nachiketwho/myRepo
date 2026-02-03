@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtester.indicators import vwap, obv, ad_line
+from backtester.indicators import vwap, vwap_bands, obv, ad_line
 
 
 class TestVWAP:
@@ -19,10 +19,7 @@ class TestVWAP:
         assert pytest.approx(result.iloc[0], rel=1e-6) == expected
 
     def test_vwap_between_high_and_low(self, sample_ohlcv):
-        """VWAP should stay within the day's price range over time."""
         result = vwap(sample_ohlcv)
-        # VWAP is a cumulative average so it won't always be between bar
-        # high/low, but should be within overall range.
         assert result.min() >= sample_ohlcv["low"].min() - 1
         assert result.max() <= sample_ohlcv["high"].max() + 1
 
@@ -32,10 +29,9 @@ class TestVWAP:
             index=pd.date_range("2024-01-01", periods=1),
         )
         result = vwap(df)
-        assert pytest.approx(result.iloc[0]) == 100.0  # (110+90+100)/3
+        assert pytest.approx(result.iloc[0]) == 100.0
 
     def test_zero_volume_returns_nan(self):
-        """Zero cumulative volume → NaN (division by zero)."""
         df = pd.DataFrame(
             {"high": [100], "low": [90], "close": [95], "volume": [0]},
             index=pd.date_range("2024-01-01", periods=1),
@@ -44,7 +40,6 @@ class TestVWAP:
         assert np.isnan(result.iloc[0])
 
     def test_non_datetime_index_uses_cumulative(self):
-        """When index isn't DatetimeIndex, VWAP doesn't reset daily."""
         df = pd.DataFrame(
             {
                 "high": [110, 120],
@@ -55,9 +50,60 @@ class TestVWAP:
             index=[0, 1],
         )
         result = vwap(df)
-        # Bar 0: tp=100, cum_tp_vol=100000, cum_vol=1000 → 100
-        # Bar 1: tp=110, cum_tp_vol=210000, cum_vol=2000 → 105
         assert pytest.approx(result.iloc[1]) == 105.0
+
+
+class TestVWAPBands:
+    def test_returns_three_series(self, sample_ohlcv):
+        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
+        assert isinstance(vwap_line, pd.Series)
+        assert isinstance(upper, pd.Series)
+        assert isinstance(lower, pd.Series)
+        assert len(vwap_line) == len(sample_ohlcv)
+
+    def test_upper_above_vwap(self, sample_ohlcv):
+        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
+        assert (upper.iloc[1:] >= vwap_line.iloc[1:] - 1e-9).all()
+
+    def test_lower_below_vwap(self, sample_ohlcv):
+        vwap_line, upper, lower = vwap_bands(sample_ohlcv)
+        assert (lower.iloc[1:] <= vwap_line.iloc[1:] + 1e-9).all()
+
+    def test_first_bar_bands_equal_vwap(self):
+        """First bar: std=0, so bands == vwap."""
+        df = pd.DataFrame(
+            {"high": [110], "low": [90], "close": [100], "volume": [500]},
+            index=pd.date_range("2024-01-01", periods=1),
+        )
+        vwap_line, upper, lower = vwap_bands(df)
+        assert pytest.approx(upper.iloc[0]) == vwap_line.iloc[0]
+        assert pytest.approx(lower.iloc[0]) == vwap_line.iloc[0]
+
+    def test_multiplier_widens_bands(self, sample_ohlcv):
+        _, upper1, lower1 = vwap_bands(sample_ohlcv, multiplier=1.0)
+        _, upper2, lower2 = vwap_bands(sample_ohlcv, multiplier=2.0)
+        assert (upper2.iloc[1:] >= upper1.iloc[1:] - 1e-9).all()
+        assert (lower2.iloc[1:] <= lower1.iloc[1:] + 1e-9).all()
+
+    def test_flat_prices_zero_std(self, flat_ohlcv):
+        """Flat prices → std=0 → bands collapse to vwap."""
+        vwap_line, upper, lower = vwap_bands(flat_ohlcv)
+        np.testing.assert_array_almost_equal(upper.values, vwap_line.values)
+        np.testing.assert_array_almost_equal(lower.values, vwap_line.values)
+
+    def test_non_datetime_index(self):
+        df = pd.DataFrame(
+            {
+                "high": [110, 120, 115],
+                "low": [90, 100, 95],
+                "close": [100, 110, 105],
+                "volume": [1000, 1000, 1000],
+            },
+            index=[0, 1, 2],
+        )
+        vwap_line, upper, lower = vwap_bands(df, multiplier=1.0)
+        assert len(vwap_line) == 3
+        assert upper.iloc[1] > lower.iloc[1]
 
 
 class TestOBV:
@@ -67,7 +113,6 @@ class TestOBV:
 
     def test_rising_prices_add_volume(self, trending_up_ohlcv):
         result = obv(trending_up_ohlcv)
-        # Every close > prev close, so OBV should monotonically increase
         diffs = result.diff().iloc[1:]
         assert (diffs > 0).all()
 
@@ -78,7 +123,6 @@ class TestOBV:
 
     def test_flat_close_no_change(self, flat_ohlcv):
         result = obv(flat_ohlcv)
-        # All closes equal → direction = 0 → OBV stays 0
         assert (result == 0).all()
 
     def test_known_values(self):
@@ -89,39 +133,29 @@ class TestOBV:
             }
         )
         result = obv(df)
-        # bar0: 0
-        # bar1: +200 (12>10)
-        # bar2: 200-150=50 (11<12)
-        # bar3: 50+300=350 (13>11)
         expected = [0, 200, 50, 350]
         np.testing.assert_array_equal(result.values, expected)
 
 
 class TestADLine:
     def test_flat_prices_return_zero(self, flat_ohlcv):
-        """When high==low==close, MFM is 0 → A/D stays 0."""
         result = ad_line(flat_ohlcv)
         np.testing.assert_array_almost_equal(result.values, 0)
 
     def test_close_at_high_gives_positive(self):
-        """Close at high → MFM = +1."""
         df = pd.DataFrame(
             {"high": [110], "low": [100], "close": [110], "volume": [1000]},
             index=pd.date_range("2024-01-01", periods=1),
         )
         result = ad_line(df)
-        # MFM = ((110-100)-(110-110)) / (110-100) = 10/10 = 1
-        # MFV = 1 * 1000 = 1000
         assert pytest.approx(result.iloc[0]) == 1000.0
 
     def test_close_at_low_gives_negative(self):
-        """Close at low → MFM = -1."""
         df = pd.DataFrame(
             {"high": [110], "low": [100], "close": [100], "volume": [1000]},
             index=pd.date_range("2024-01-01", periods=1),
         )
         result = ad_line(df)
-        # MFM = ((100-100)-(110-100)) / (110-100) = -10/10 = -1
         assert pytest.approx(result.iloc[0]) == -1000.0
 
     def test_close_at_midpoint_gives_zero(self):
@@ -130,7 +164,6 @@ class TestADLine:
             index=pd.date_range("2024-01-01", periods=1),
         )
         result = ad_line(df)
-        # MFM = ((105-100)-(110-105)) / 10 = 0/10 = 0
         assert pytest.approx(result.iloc[0]) == 0.0
 
     def test_cumulative_behavior(self):
@@ -144,8 +177,5 @@ class TestADLine:
             index=pd.date_range("2024-01-01", periods=2),
         )
         result = ad_line(df)
-        # Bar 0: MFM=1, MFV=1000
-        # Bar 1: MFM=((100-100)-(120-100))/20 = -1, MFV=-2000
-        # Cumulative: 1000, -1000
         assert pytest.approx(result.iloc[0]) == 1000.0
         assert pytest.approx(result.iloc[1]) == -1000.0

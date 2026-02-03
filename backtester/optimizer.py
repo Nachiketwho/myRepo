@@ -40,7 +40,9 @@ def run_optimization(
 
     for combo in combos:
         strat_params = {
-            k: combo[k] for k in ("obv_lookback", "ad_lookback") if k in combo
+            k: combo[k]
+            for k in ("band_multiplier", "obv_lookback", "ad_lookback")
+            if k in combo
         }
         engine_params = {
             k: combo[k]

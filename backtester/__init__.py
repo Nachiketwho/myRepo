@@ -1,4 +1,4 @@
-from backtester.indicators import vwap, obv, ad_line
+from backtester.indicators import vwap, vwap_bands, obv, ad_line
 from backtester.strategy import VolumeStrategy
 from backtester.engine import BacktestEngine, BacktestResult, Trade
 from backtester.optimizer import run_optimization, best_params
@@ -8,6 +8,7 @@ from backtester.data import fetch_nifty50  # noqa: lazy yf import inside
 
 __all__ = [
     "vwap",
+    "vwap_bands",
     "obv",
     "ad_line",
     "VolumeStrategy",
