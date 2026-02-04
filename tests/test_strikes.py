@@ -5,8 +5,8 @@ import pytest
 
 from backtester.strikes import (
     get_atm_strike, get_otm_strikes, get_strike_range,
-    next_thursdays, days_to_expiry, time_to_expiry_years,
-    describe_strike,
+    next_thursdays, next_expiry_dates, days_to_expiry, time_to_expiry_years,
+    describe_strike, is_trading_day, adjust_expiry, NSE_HOLIDAYS,
     STRIKE_INTERVAL, LOT_SIZE,
 )
 
@@ -138,10 +138,11 @@ class TestNextThursdays:
         for d in result:
             assert d.weekday() == 3
 
-    def test_thursdays_are_consecutive_weeks(self):
+    def test_expiries_are_roughly_weekly(self):
         result = next_thursdays(dt.date(2024, 1, 1), count=4)
         for i in range(1, len(result)):
-            assert (result[i] - result[i - 1]).days == 7
+            gap = (result[i] - result[i - 1]).days
+            assert 5 <= gap <= 8  # allow for holiday adjustment
 
     def test_from_wednesday(self):
         """Wednesday → next day is Thursday."""
@@ -205,3 +206,59 @@ class TestDescribeStrike:
 
     def test_4_otm(self):
         assert describe_strike(22000, 22200, "CE") == "4-OTM"
+
+
+# ---------------------------------------------------------------------------
+# NSE holidays & expiry adjustment
+# ---------------------------------------------------------------------------
+
+class TestNSEHolidays:
+    def test_holidays_set_not_empty(self):
+        assert len(NSE_HOLIDAYS) > 0
+
+    def test_republic_day_2024_is_holiday(self):
+        assert dt.date(2024, 1, 26) in NSE_HOLIDAYS
+
+    def test_christmas_2024_is_holiday(self):
+        assert dt.date(2024, 12, 25) in NSE_HOLIDAYS
+
+    def test_regular_trading_day(self):
+        # Jan 2, 2024 is a Tuesday — normal trading day
+        assert is_trading_day(dt.date(2024, 1, 2))
+
+    def test_saturday_not_trading_day(self):
+        assert not is_trading_day(dt.date(2024, 1, 6))
+
+    def test_sunday_not_trading_day(self):
+        assert not is_trading_day(dt.date(2024, 1, 7))
+
+    def test_holiday_not_trading_day(self):
+        assert not is_trading_day(dt.date(2024, 1, 26))
+
+    def test_adjust_expiry_normal_thursday(self):
+        """Non-holiday Thursday stays as is."""
+        thu = dt.date(2024, 1, 4)  # regular Thursday
+        assert adjust_expiry(thu) == thu
+
+    def test_adjust_expiry_holiday_thursday(self):
+        """Holiday Thursday moves to previous trading day (Wednesday)."""
+        # Aug 15, 2024 is Independence Day (Thursday)
+        thu = dt.date(2024, 8, 15)
+        assert thu.weekday() == 3  # confirm it's a Thursday
+        adjusted = adjust_expiry(thu)
+        assert adjusted < thu
+        assert is_trading_day(adjusted)
+
+    def test_next_expiry_dates_adjusts_holidays(self):
+        """next_expiry_dates should return adjusted dates."""
+        # Test near Aug 15, 2024 (Independence Day on Thursday)
+        result = next_expiry_dates(dt.date(2024, 8, 10), count=2)
+        assert len(result) == 2
+        for d in result:
+            assert is_trading_day(d)
+
+    def test_all_expiry_dates_are_trading_days(self):
+        """All returned expiry dates should be valid trading days."""
+        result = next_expiry_dates(dt.date(2024, 1, 1), count=52)
+        for d in result:
+            assert is_trading_day(d), f"{d} is not a trading day"

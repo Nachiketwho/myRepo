@@ -73,6 +73,13 @@ class FnOTrade:
     exit_reason: FnOExitReason = None
     greeks_exit: dict = field(default_factory=dict)
 
+    # Indicator snapshots at entry/exit
+    indicators_entry: dict = field(default_factory=dict)
+    indicators_exit: dict = field(default_factory=dict)
+
+    # Signal strength at entry (how many confirmations aligned)
+    signal_strength: int = 0
+
     # Tracking
     premium_high: float = 0.0   # highest premium seen during trade
     tsl_active: bool = False
@@ -153,6 +160,80 @@ class FnOResult:
         return counts
 
 
+_INDICATOR_COLS = [
+    "vwap", "vwap_upper_inner", "vwap_upper_outer",
+    "vwap_lower_inner", "vwap_lower_outer", "obv", "ad_line",
+]
+
+
+def _capture_indicators(row: pd.Series) -> dict:
+    """Extract indicator values from a signals_df row."""
+    snap: dict = {}
+    for col in _INDICATOR_COLS:
+        if col in row.index:
+            val = row[col]
+            snap[col] = round(float(val), 2) if pd.notna(val) else None
+    # Derive useful context
+    if "vwap" in snap and snap["vwap"] is not None:
+        close = float(row["close"])
+        snap["close_vs_vwap"] = round(close - snap["vwap"], 2)
+        snap["close_vs_vwap_pct"] = round(
+            (close - snap["vwap"]) / snap["vwap"] * 100, 3
+        ) if snap["vwap"] != 0 else 0.0
+    return snap
+
+
+def _signal_strength(row: pd.Series, signals_df: pd.DataFrame, idx: int,
+                     obv_lookback: int = 3, ad_lookback: int = 3) -> int:
+    """Count how many confirmation factors aligned for this signal.
+
+    Returns 0-4:
+      +1 if inner band touch
+      +1 if outer band touch
+      +1 if OBV confirms direction
+      +1 if AD Line confirms direction
+    """
+    strength = 0
+    signal = row["signal"]
+    if signal == 0:
+        return 0
+
+    # Band touches
+    if signal == 1:  # buy
+        if "vwap_lower_inner" in row.index and pd.notna(row["vwap_lower_inner"]):
+            if row["low"] <= row["vwap_lower_inner"]:
+                strength += 1
+        if "vwap_lower_outer" in row.index and pd.notna(row["vwap_lower_outer"]):
+            if row["low"] <= row["vwap_lower_outer"]:
+                strength += 1
+    else:  # sell
+        if "vwap_upper_inner" in row.index and pd.notna(row["vwap_upper_inner"]):
+            if row["high"] >= row["vwap_upper_inner"]:
+                strength += 1
+        if "vwap_upper_outer" in row.index and pd.notna(row["vwap_upper_outer"]):
+            if row["high"] >= row["vwap_upper_outer"]:
+                strength += 1
+
+    # Volume confirmations
+    if "obv" in row.index and idx >= obv_lookback:
+        obv_now = row["obv"]
+        obv_prev = signals_df.iloc[idx - obv_lookback]["obv"]
+        if signal == 1 and obv_now > obv_prev:
+            strength += 1
+        elif signal == -1 and obv_now < obv_prev:
+            strength += 1
+
+    if "ad_line" in row.index and idx >= ad_lookback:
+        ad_now = row["ad_line"]
+        ad_prev = signals_df.iloc[idx - ad_lookback]["ad_line"]
+        if signal == 1 and ad_now > ad_prev:
+            strength += 1
+        elif signal == -1 and ad_now < ad_prev:
+            strength += 1
+
+    return strength
+
+
 class FnOEngine:
     """F&O backtesting engine — option buying only.
 
@@ -170,6 +251,9 @@ class FnOEngine:
         num_lots: int = 1,
         risk_free_rate: float = 0.07,
         exit_before_expiry_days: int = 1,
+        min_signal_strength: int = 0,
+        min_premium: float = 0.0,
+        min_delta: float = 0.0,
     ):
         self.sl_points = sl_points
         self.tp_points = tp_points
@@ -179,6 +263,9 @@ class FnOEngine:
         self.num_lots = num_lots
         self.r = risk_free_rate
         self.exit_before_expiry_days = exit_before_expiry_days
+        self.min_signal_strength = min_signal_strength
+        self.min_premium = min_premium
+        self.min_delta = min_delta
 
     def run(
         self,
@@ -230,11 +317,17 @@ class FnOEngine:
                         spot, position.strike, T_exit, self.r,
                         iv, position.option_type,
                     )
+                    position.indicators_exit = _capture_indicators(row)
                     trades.append(position)
                     position = None
 
             # --- Check entries ---
             if position is None and signal != 0:
+                # Compute signal strength
+                strength = _signal_strength(row, signals_df, i)
+                if strength < self.min_signal_strength:
+                    continue  # skip weak signals
+
                 option_type = "CE" if signal == 1 else "PE"
 
                 # Select strike
@@ -259,9 +352,20 @@ class FnOEngine:
                 if premium <= 0:
                     continue  # skip degenerate pricing
 
+                # Filter: minimum premium
+                if premium < self.min_premium:
+                    continue
+
                 greeks = greeks_snapshot(
                     spot, strike, T, self.r, iv, option_type
                 )
+
+                # Filter: minimum delta
+                if abs(greeks.get("delta", 0)) < self.min_delta:
+                    continue
+
+                # Capture indicator snapshot at entry
+                ind_entry = _capture_indicators(row)
 
                 position = FnOTrade(
                     entry_date=date,
@@ -273,13 +377,16 @@ class FnOEngine:
                     lot_size=self.lot_size,
                     num_lots=self.num_lots,
                     greeks_entry=greeks,
+                    indicators_entry=ind_entry,
+                    signal_strength=strength,
                     premium_high=round(premium, 2),
                 )
 
         # Close any open position at end of data
         if position is not None:
+            last_row = signals_df.iloc[-1]
             last_date = signals_df.index[-1]
-            last_spot = signals_df.iloc[-1]["close"]
+            last_spot = last_row["close"]
             current_date = last_date.date() if hasattr(last_date, 'date') else last_date
             iv = self._get_iv(vix_series, current_date)
             T = time_to_expiry_years(current_date, position.expiry)
@@ -294,6 +401,7 @@ class FnOEngine:
                 last_spot, position.strike, T, self.r,
                 iv, position.option_type,
             )
+            position.indicators_exit = _capture_indicators(last_row)
             trades.append(position)
 
         return FnOResult(
@@ -441,26 +549,49 @@ def run_fno_analysis(
 
 
 def build_fno_trade_log(result: FnOResult) -> pd.DataFrame:
-    """Build a readable trade log from an FnOResult."""
+    """Build a detailed trade log with indicators and Greeks."""
     rows = []
     for t in result.trades:
-        rows.append({
+        row = {
+            # Trade basics
             "entry_date": t.entry_date,
             "exit_date": t.exit_date,
             "contract": t.contract_label,
             "expiry": t.expiry,
             "entry_spot": round(t.entry_spot, 2),
             "exit_spot": round(t.exit_spot, 2),
+            # Premium & PnL
             "premium_in": t.premium_entry,
             "premium_out": t.premium_exit,
+            "premium_high": round(t.premium_high, 2),
             "pnl_per_lot": round(t.pnl_per_lot, 2),
             "pnl_total": round(t.pnl, 2),
+            "pnl_pct": round(t.pnl_pct, 1),
             "hold_days": t.hold_days,
             "exit_reason": t.exit_reason.value if t.exit_reason else "",
-            "delta_in": t.greeks_entry.get("delta", ""),
-            "theta_in": t.greeks_entry.get("theta", ""),
-            "iv_in": t.greeks_entry.get("iv", ""),
-            "delta_out": t.greeks_exit.get("delta", ""),
-            "theta_out": t.greeks_exit.get("theta", ""),
-        })
+            # Signal quality
+            "signal_strength": t.signal_strength,
+            # Greeks at entry
+            "delta_in": round(t.greeks_entry.get("delta", 0), 4),
+            "gamma_in": round(t.greeks_entry.get("gamma", 0), 6),
+            "theta_in": round(t.greeks_entry.get("theta", 0), 2),
+            "vega_in": round(t.greeks_entry.get("vega", 0), 2),
+            "iv_in": round(t.greeks_entry.get("iv", 0), 1),
+            # Greeks at exit
+            "delta_out": round(t.greeks_exit.get("delta", 0), 4),
+            "theta_out": round(t.greeks_exit.get("theta", 0), 2),
+            "iv_out": round(t.greeks_exit.get("iv", 0), 1),
+            # Indicators at entry
+            "vwap_in": t.indicators_entry.get("vwap", ""),
+            "close_vs_vwap_in": t.indicators_entry.get("close_vs_vwap", ""),
+            "close_vs_vwap_pct_in": t.indicators_entry.get("close_vs_vwap_pct", ""),
+            "obv_in": t.indicators_entry.get("obv", ""),
+            "ad_in": t.indicators_entry.get("ad_line", ""),
+            # Indicators at exit
+            "vwap_out": t.indicators_exit.get("vwap", ""),
+            "close_vs_vwap_out": t.indicators_exit.get("close_vs_vwap", ""),
+            "obv_out": t.indicators_exit.get("obv", ""),
+            "ad_out": t.indicators_exit.get("ad_line", ""),
+        }
+        rows.append(row)
     return pd.DataFrame(rows)

@@ -2,10 +2,11 @@
 
 import sys
 from unittest.mock import patch, MagicMock, PropertyMock
+import numpy as np
 import pandas as pd
 import pytest
 
-from backtester.data import TIMEFRAMES, PERIOD_DEFAULTS
+from backtester.data import TIMEFRAMES, PERIOD_DEFAULTS, validate_ohlcv, DataValidationError
 
 
 def _mock_history(**kwargs):
@@ -74,3 +75,84 @@ class TestFetchNifty50:
     def test_period_defaults_exist(self):
         for tf in TIMEFRAMES:
             assert tf in PERIOD_DEFAULTS
+
+
+# ---------------------------------------------------------------------------
+# Data validation
+# ---------------------------------------------------------------------------
+
+def _valid_df(n=20):
+    """Build a valid Nifty50-like OHLCV DataFrame."""
+    dates = pd.date_range("2024-01-01", periods=n, freq="B")
+    closes = [22000 + i * 10 for i in range(n)]
+    return pd.DataFrame({
+        "open": [c - 5 for c in closes],
+        "high": [c + 10 for c in closes],
+        "low": [c - 10 for c in closes],
+        "close": closes,
+        "volume": [1000] * n,
+    }, index=dates)
+
+
+class TestValidateOHLCV:
+    def test_valid_data_no_warnings(self):
+        warnings = validate_ohlcv(_valid_df())
+        # May have freshness warning depending on current date
+        critical = [w for w in warnings if "stale" not in w]
+        assert len(critical) == 0
+
+    def test_empty_raises(self):
+        with pytest.raises(DataValidationError, match="empty"):
+            validate_ohlcv(pd.DataFrame())
+
+    def test_missing_columns_raises(self):
+        df = pd.DataFrame({"open": [1], "close": [1]})
+        with pytest.raises(DataValidationError, match="missing columns"):
+            validate_ohlcv(df)
+
+    def test_zero_close_raises(self):
+        df = _valid_df()
+        df.iloc[5, df.columns.get_loc("close")] = 0
+        with pytest.raises(DataValidationError, match="close <= 0"):
+            validate_ohlcv(df)
+
+    def test_nan_warning(self):
+        df = _valid_df()
+        df.iloc[0, df.columns.get_loc("close")] = np.nan
+        warnings = validate_ohlcv(df)
+        assert any("NaN" in w for w in warnings)
+
+    def test_too_many_nans_raises(self):
+        df = _valid_df(10)
+        # Set >10% of OHLC cells to NaN
+        for col in ["open", "high", "low", "close"]:
+            df.iloc[:5, df.columns.get_loc(col)] = np.nan
+        with pytest.raises(DataValidationError, match="too many NaN"):
+            validate_ohlcv(df)
+
+    def test_high_below_low_warning(self):
+        df = _valid_df()
+        df.iloc[3, df.columns.get_loc("high")] = df.iloc[3]["low"] - 10
+        warnings = validate_ohlcv(df)
+        assert any("high < low" in w for w in warnings)
+
+    def test_unusual_price_range_warning(self):
+        df = _valid_df()
+        df["close"] = 100  # way below Nifty50 range
+        df["open"] = 100
+        df["high"] = 110
+        df["low"] = 90
+        warnings = validate_ohlcv(df)
+        assert any("unusual for Nifty50" in w for w in warnings)
+
+    def test_zero_volume_warning(self):
+        df = _valid_df()
+        df["volume"] = 0
+        warnings = validate_ohlcv(df)
+        assert any("zero volume" in w for w in warnings)
+
+    def test_duplicate_index_warning(self):
+        df = _valid_df(5)
+        df.index = pd.DatetimeIndex(["2024-01-01"] * 5)
+        warnings = validate_ohlcv(df)
+        assert any("duplicate" in w for w in warnings)

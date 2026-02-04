@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 
 NIFTY50_SYMBOL = "^NSEI"
@@ -108,3 +109,103 @@ def fetch_india_vix(
     vix.index = vix.index.date if hasattr(vix.index, 'date') else vix.index
     vix.index.name = "date"
     return vix
+
+
+# ---------------------------------------------------------------------------
+# Data validation
+# ---------------------------------------------------------------------------
+
+class DataValidationError(Exception):
+    """Raised when fetched data fails integrity checks."""
+
+
+def validate_ohlcv(df: pd.DataFrame, label: str = "data") -> list[str]:
+    """Run integrity checks on OHLCV data.  Returns list of warnings.
+
+    Raises DataValidationError for critical failures.
+    """
+    warnings: list[str] = []
+
+    if df.empty:
+        raise DataValidationError(f"{label}: DataFrame is empty — no data to validate")
+
+    required = {"open", "high", "low", "close", "volume"}
+    missing = required - set(df.columns)
+    if missing:
+        raise DataValidationError(f"{label}: missing columns: {missing}")
+
+    n = len(df)
+
+    # --- NaN checks ---
+    nan_counts = df[["open", "high", "low", "close"]].isna().sum()
+    total_nans = nan_counts.sum()
+    if total_nans > 0:
+        pct = total_nans / (n * 4) * 100
+        warnings.append(f"{label}: {total_nans} NaN values in OHLC ({pct:.1f}%)")
+        if pct > 10:
+            raise DataValidationError(
+                f"{label}: too many NaN values ({pct:.1f}%) — data unreliable"
+            )
+
+    # --- OHLC relationship: high >= low, high >= open/close, low <= open/close ---
+    bad_hl = (df["high"] < df["low"]).sum()
+    if bad_hl > 0:
+        warnings.append(f"{label}: {bad_hl} bars where high < low")
+
+    bad_ho = (df["high"] < df["open"]).sum()
+    bad_hc = (df["high"] < df["close"]).sum()
+    if bad_ho + bad_hc > 0:
+        warnings.append(f"{label}: {bad_ho + bad_hc} bars where high < open or close")
+
+    bad_lo = (df["low"] > df["open"]).sum()
+    bad_lc = (df["low"] > df["close"]).sum()
+    if bad_lo + bad_lc > 0:
+        warnings.append(f"{label}: {bad_lo + bad_lc} bars where low > open or close")
+
+    # --- Zero/negative prices ---
+    zero_close = (df["close"] <= 0).sum()
+    if zero_close > 0:
+        raise DataValidationError(
+            f"{label}: {zero_close} bars with close <= 0 — data corrupt"
+        )
+
+    # --- Duplicate index ---
+    dupes = df.index.duplicated().sum()
+    if dupes > 0:
+        warnings.append(f"{label}: {dupes} duplicate timestamps in index")
+
+    # --- Monotonic index ---
+    if not df.index.is_monotonic_increasing:
+        warnings.append(f"{label}: index is not monotonically increasing")
+
+    # --- Price range sanity (Nifty50 specific) ---
+    min_close = df["close"].min()
+    max_close = df["close"].max()
+    if min_close < 5000 or max_close > 50000:
+        warnings.append(
+            f"{label}: close range [{min_close:.0f}, {max_close:.0f}] "
+            f"looks unusual for Nifty50"
+        )
+
+    # --- Volume sanity ---
+    zero_vol_pct = (df["volume"] == 0).sum() / n * 100
+    if zero_vol_pct > 50:
+        warnings.append(
+            f"{label}: {zero_vol_pct:.0f}% bars have zero volume "
+            f"(Yahoo Finance known issue for index intraday)"
+        )
+
+    # --- Data freshness ---
+    last_date = df.index[-1]
+    if hasattr(last_date, 'date'):
+        last_date = last_date.date()
+    import datetime as _dt
+    today = _dt.date.today()
+    gap_days = (today - last_date).days if isinstance(last_date, _dt.date) else 0
+    if gap_days > 5:
+        warnings.append(
+            f"{label}: last data point is {gap_days} days old "
+            f"({last_date}) — data may be stale"
+        )
+
+    return warnings

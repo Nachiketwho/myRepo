@@ -12,7 +12,7 @@ import argparse
 import os
 import pandas as pd
 
-from backtester.data import fetch_nifty50, TIMEFRAMES
+from backtester.data import fetch_nifty50, TIMEFRAMES, validate_ohlcv
 from backtester.strategy import (
     VolumeStrategy, get_defaults,
     PARAM_GRID, ENGINE_PARAM_GRID,
@@ -254,6 +254,13 @@ def main():
 
     for tf in args.timeframes:
         df = fetch_nifty50(timeframe=tf)
+
+        # Validate data integrity
+        warnings = validate_ohlcv(df, label=f"Nifty50/{tf}")
+        if warnings:
+            print(f"\n  Data warnings ({tf}):")
+            for w in warnings:
+                print(f"    ⚠ {w}")
 
         if args.fno:
             run_fno_for_timeframe(
