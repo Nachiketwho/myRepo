@@ -27,6 +27,8 @@ from backtester.data import fetch_india_vix
 from backtester.fno_engine import (
     FnOEngine, FNO_DEFAULTS, run_fno_analysis, build_fno_trade_log,
 )
+from backtester.fno_optimizer import run_fno_optimization
+from backtester.phantom_trades import find_phantom_trades
 
 
 def _grids_for_timeframe(tf: str):
@@ -145,8 +147,10 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str, timestamp: 
 
 def run_fno_for_timeframe(
     df: pd.DataFrame, label: str, output_dir: str,
-    sl_points: float = 50.0, tp_points: float = 50.0,
+    base_sl: float = 30.0, rr_ratio: float = 2.0,
+    ema_period: int = 21, min_signal_strength: int = 2,
     num_otm: int = 4, num_expiries: int = 4,
+    optimize: bool = False,
     timestamp: str = "",
 ):
     """Run F&O strike × expiry analysis for one timeframe."""
@@ -155,9 +159,10 @@ def run_fno_for_timeframe(
 
     print(f"\n{'='*60}")
     print(f"  F&O ANALYSIS: {label}  ({len(df)} bars)")
-    print(f"  Range: {df.index[0].date()} → {df.index[-1].date()}")
-    print(f"  SL={sl_points}pts, TP={tp_points}pts, "
-          f"strikes=ATM+{num_otm} OTM, expiries={num_expiries}")
+    print(f"  Range: {df.index[0].date()} -> {df.index[-1].date()}")
+    print(f"  base_sl={base_sl}pts, rr_ratio={rr_ratio}, ema={ema_period}, "
+          f"min_str={min_signal_strength}")
+    print(f"  strikes=ATM+{num_otm} OTM, expiries={num_expiries}")
     print(f"{'='*60}")
 
     # Generate signals from spot strategy
@@ -175,7 +180,7 @@ def run_fno_for_timeframe(
           f"{(signals['signal']==-1).sum()} sell)")
 
     if num_signals == 0:
-        print("  No signals — skipping F&O analysis.")
+        print("  No signals -- skipping F&O analysis.")
         return
 
     # Fetch India VIX
@@ -188,22 +193,26 @@ def run_fno_for_timeframe(
         print(f"  VIX fetch failed ({e}), using default IV=15%")
         vix = pd.Series(dtype=float)
 
-    # Run strike × expiry sweep
-    print(f"\n  Running {num_otm + 1} strikes × {num_expiries} expiries "
+    engine_kwargs = dict(
+        base_sl=base_sl, rr_ratio=rr_ratio,
+        ema_period=ema_period, min_signal_strength=min_signal_strength,
+    )
+
+    # Run strike x expiry sweep
+    print(f"\n  Running {num_otm + 1} strikes x {num_expiries} expiries "
           f"= {(num_otm + 1) * num_expiries} combos...")
     summary = run_fno_analysis(
         signals, vix,
         num_otm=num_otm,
         num_expiries=num_expiries,
-        sl_points=sl_points,
-        tp_points=tp_points,
+        **engine_kwargs,
     )
 
     if summary.empty:
         print("  No trades generated across any combo.")
         return
 
-    print(f"\n--- F&O Strike × Expiry Summary ({len(summary)} combos with trades) ---")
+    print(f"\n--- F&O Strike x Expiry Summary ({len(summary)} combos with trades) ---")
     print(summary.to_string(index=False))
 
     # Export summary
@@ -217,7 +226,7 @@ def run_fno_for_timeframe(
     print(f"  Trades={int(best['num_trades'])}, PnL={best['total_pnl']:.2f}, "
           f"WR={best['win_rate']:.1f}%, Avg hold={best['avg_hold_days']:.1f}d")
 
-    engine = FnOEngine(sl_points=sl_points, tp_points=tp_points)
+    engine = FnOEngine(**engine_kwargs)
     best_result = engine.run(
         signals, vix,
         strike_offset=int(best["strike_offset"]),
@@ -231,6 +240,38 @@ def run_fno_for_timeframe(
     trade_log.to_csv(log_path, index=False)
     print(f"\n  Trade log: {log_path}")
 
+    # --- Phantom trade detection ---
+    print(f"\n--- Phantom Trades (missed opportunities) ---")
+    phantoms = find_phantom_trades(signals, vix)
+    if not phantoms.empty:
+        print(f"  Found {len(phantoms)} phantom trades")
+        print(phantoms.head(10).to_string(index=False))
+        phantom_path = os.path.join(output_dir, f"fno_phantoms_{label}_{timestamp}.csv")
+        phantoms.to_csv(phantom_path, index=False)
+        print(f"\n  Phantom trades: {phantom_path}")
+    else:
+        print("  No phantom trades found.")
+
+    # --- F&O Optimizer (optional) ---
+    if optimize:
+        print(f"\n--- F&O Optimizer (parameter sweep) ---")
+        opt_results = run_fno_optimization(
+            signals, vix,
+            num_otm=num_otm,
+            num_expiries=num_expiries,
+            min_trades=3,
+        )
+        if not opt_results.empty:
+            print(f"  Tested {len(opt_results)} valid combos")
+            print("\n  Top 5 by total PnL:")
+            print(opt_results.head(5).to_string(index=False))
+
+            opt_path = os.path.join(output_dir, f"fno_optimizer_{label}_{timestamp}.csv")
+            opt_results.to_csv(opt_path, index=False)
+            print(f"\n  Optimizer results: {opt_path}")
+        else:
+            print("  No combos met min_trades threshold.")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Nifty50 Backtester")
@@ -241,15 +282,21 @@ def main():
     )
     parser.add_argument("--output", default="output", help="Output directory for CSVs")
     parser.add_argument("--fno", action="store_true",
-                        help="Run F&O strike × expiry analysis")
-    parser.add_argument("--sl-points", type=float, default=50.0,
-                        help="F&O stop-loss in premium points (default: 50)")
-    parser.add_argument("--tp-points", type=float, default=50.0,
-                        help="F&O take-profit in premium points (default: 50)")
+                        help="Run F&O strike x expiry analysis")
+    parser.add_argument("--base-sl", type=float, default=30.0,
+                        help="F&O base stop-loss in premium points (default: 30)")
+    parser.add_argument("--rr-ratio", type=float, default=2.0,
+                        help="Risk-reward ratio for TP calculation (default: 2.0)")
+    parser.add_argument("--ema-period", type=int, default=21,
+                        help="EMA period for trend validation (default: 21)")
+    parser.add_argument("--min-strength", type=int, default=2,
+                        help="Minimum signal strength to enter (default: 2)")
     parser.add_argument("--num-otm", type=int, default=4,
                         help="Number of OTM strikes to test (default: 4)")
     parser.add_argument("--num-expiries", type=int, default=4,
                         help="Number of weekly expiries to test (default: 4)")
+    parser.add_argument("--fno-optimize", action="store_true",
+                        help="Run F&O parameter optimizer (slow)")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -268,10 +315,13 @@ def main():
         if args.fno:
             run_fno_for_timeframe(
                 df, tf, args.output,
-                sl_points=args.sl_points,
-                tp_points=args.tp_points,
+                base_sl=args.base_sl,
+                rr_ratio=args.rr_ratio,
+                ema_period=args.ema_period,
+                min_signal_strength=args.min_strength,
                 num_otm=args.num_otm,
                 num_expiries=args.num_expiries,
+                optimize=args.fno_optimize,
                 timestamp=run_ts,
             )
         else:
