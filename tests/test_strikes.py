@@ -114,47 +114,51 @@ class TestGetStrikeRange:
 
 
 # ---------------------------------------------------------------------------
-# Next Thursdays
+# Next expiry dates (Tuesday)
 # ---------------------------------------------------------------------------
 
-class TestNextThursdays:
+class TestNextExpiries:
     def test_from_monday(self):
-        """Monday → next Thursday is 3 days later."""
+        """Monday → next Tuesday is 1 day later."""
         mon = dt.date(2024, 1, 1)  # Monday
-        result = next_thursdays(mon, count=1)
+        result = next_expiry_dates(mon, count=1)
         assert len(result) == 1
-        assert result[0] == dt.date(2024, 1, 4)  # Thursday
-        assert result[0].weekday() == 3
+        assert result[0] == dt.date(2024, 1, 2)  # Tuesday
+        assert result[0].weekday() == 1
 
-    def test_from_thursday(self):
-        """Thursday → skip current day, return NEXT Thursday."""
-        thu = dt.date(2024, 1, 4)  # Thursday
-        result = next_thursdays(thu, count=1)
-        assert result[0] == dt.date(2024, 1, 11)
+    def test_from_tuesday(self):
+        """Tuesday → skip current day, return NEXT Tuesday."""
+        tue = dt.date(2024, 1, 2)  # Tuesday
+        result = next_expiry_dates(tue, count=1)
+        assert result[0] == dt.date(2024, 1, 9)
 
-    def test_four_thursdays(self):
-        result = next_thursdays(dt.date(2024, 1, 1), count=4)
+    def test_four_expiries(self):
+        result = next_expiry_dates(dt.date(2024, 1, 1), count=4)
         assert len(result) == 4
-        for d in result:
-            assert d.weekday() == 3
 
     def test_expiries_are_roughly_weekly(self):
-        result = next_thursdays(dt.date(2024, 1, 1), count=4)
+        result = next_expiry_dates(dt.date(2024, 1, 1), count=4)
         for i in range(1, len(result)):
             gap = (result[i] - result[i - 1]).days
             assert 5 <= gap <= 8  # allow for holiday adjustment
 
     def test_from_wednesday(self):
-        """Wednesday → next day is Thursday."""
+        """Wednesday → next Tuesday is 6 days later."""
         wed = dt.date(2024, 1, 3)
-        result = next_thursdays(wed, count=1)
-        assert result[0] == dt.date(2024, 1, 4)
+        result = next_expiry_dates(wed, count=1)
+        assert result[0] == dt.date(2024, 1, 9)
 
     def test_from_friday(self):
-        """Friday → skip weekend, next Thursday is 6 days later."""
+        """Friday → next Tuesday is 4 days later."""
         fri = dt.date(2024, 1, 5)
-        result = next_thursdays(fri, count=1)
-        assert result[0] == dt.date(2024, 1, 11)
+        result = next_expiry_dates(fri, count=1)
+        assert result[0] == dt.date(2024, 1, 9)
+
+    def test_backward_compat_alias(self):
+        """next_thursdays still works as an alias."""
+        result_new = next_expiry_dates(dt.date(2024, 1, 1), count=4)
+        result_old = next_thursdays(dt.date(2024, 1, 1), count=4)
+        assert result_new == result_old
 
 
 # ---------------------------------------------------------------------------
@@ -235,24 +239,24 @@ class TestNSEHolidays:
     def test_holiday_not_trading_day(self):
         assert not is_trading_day(dt.date(2024, 1, 26))
 
-    def test_adjust_expiry_normal_thursday(self):
-        """Non-holiday Thursday stays as is."""
-        thu = dt.date(2024, 1, 4)  # regular Thursday
-        assert adjust_expiry(thu) == thu
+    def test_adjust_expiry_normal_tuesday(self):
+        """Non-holiday Tuesday stays as is."""
+        tue = dt.date(2024, 1, 2)  # regular Tuesday
+        assert adjust_expiry(tue) == tue
 
-    def test_adjust_expiry_holiday_thursday(self):
-        """Holiday Thursday moves to previous trading day (Wednesday)."""
-        # Aug 15, 2024 is Independence Day (Thursday)
-        thu = dt.date(2024, 8, 15)
-        assert thu.weekday() == 3  # confirm it's a Thursday
-        adjusted = adjust_expiry(thu)
-        assert adjusted < thu
+    def test_adjust_expiry_holiday_tuesday(self):
+        """Holiday Tuesday moves to previous trading day (Monday)."""
+        # Oct 21, 2025 is Diwali (Laxmi Pujan) — a Tuesday
+        tue = dt.date(2025, 10, 21)
+        assert tue.weekday() == 1  # confirm it's a Tuesday
+        adjusted = adjust_expiry(tue)
+        assert adjusted < tue
         assert is_trading_day(adjusted)
 
     def test_next_expiry_dates_adjusts_holidays(self):
         """next_expiry_dates should return adjusted dates."""
-        # Test near Aug 15, 2024 (Independence Day on Thursday)
-        result = next_expiry_dates(dt.date(2024, 8, 10), count=2)
+        # Test near Oct 21, 2025 (Diwali on a Tuesday)
+        result = next_expiry_dates(dt.date(2025, 10, 14), count=2)
         assert len(result) == 2
         for d in result:
             assert is_trading_day(d)

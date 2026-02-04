@@ -240,24 +240,24 @@ class TestFnOResult:
 
 class TestFnOEngine:
     def test_buy_signal_creates_ce(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         assert result.num_trades >= 1
         assert result.trades[0].option_type == "CE"
 
     def test_sell_signal_creates_pe(self, signals_sell_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_sell_only, vix_series)
         assert result.num_trades >= 1
         assert result.trades[0].option_type == "PE"
 
     def test_no_signals_no_trades(self, signals_no_signals, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_no_signals, vix_series)
         assert result.num_trades == 0
 
     def test_strike_offset_atm(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series, strike_offset=0)
         if result.trades:
             trade = result.trades[0]
@@ -265,7 +265,7 @@ class TestFnOEngine:
             assert trade.strike == expected_strike
 
     def test_strike_offset_otm_ce(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series, strike_offset=2)
         if result.trades:
             trade = result.trades[0]
@@ -273,7 +273,7 @@ class TestFnOEngine:
             assert trade.strike == atm + 2 * STRIKE_INTERVAL
 
     def test_strike_offset_otm_pe(self, signals_sell_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_sell_only, vix_series, strike_offset=2)
         if result.trades:
             trade = result.trades[0]
@@ -281,7 +281,7 @@ class TestFnOEngine:
             assert trade.strike == atm - 2 * STRIKE_INTERVAL
 
     def test_expiry_week_selection(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         r1 = engine.run(signals_buy_only, vix_series, expiry_week=1)
         r2 = engine.run(signals_buy_only, vix_series, expiry_week=3)
         if r1.trades and r2.trades:
@@ -289,8 +289,6 @@ class TestFnOEngine:
 
     def test_end_of_data_exit(self, vix_series):
         """Open position at end of data should be closed with END_OF_DATA."""
-        # Use short data (5 bars) with signal on bar 0 and far expiry (week 4)
-        # so expiry_eve doesn't trigger first
         dates = pd.date_range("2024-01-01", periods=5, freq="B")
         df = pd.DataFrame({
             "open":   [22000] * 5,
@@ -300,8 +298,8 @@ class TestFnOEngine:
             "volume": [1000] * 5,
             "signal": [1, 0, 0, 0, 0],
         }, index=dates)
-        engine = FnOEngine(sl_points=9999, tp_points=9999)
-        result = engine.run(df, vix_series, expiry_week=4)  # ~4 weeks out
+        engine = FnOEngine(sl_points=9999, tp_points=9999, min_signal_strength=0)
+        result = engine.run(df, vix_series, expiry_week=4)
         assert result.num_trades >= 1
         last_trade = result.trades[-1]
         assert last_trade.exit_reason == FnOExitReason.END_OF_DATA
@@ -319,8 +317,8 @@ class TestFnOEngine:
         }, index=dates)
         df.iloc[3, df.columns.get_loc("signal")] = 1   # buy CE
         df.iloc[10, df.columns.get_loc("signal")] = -1  # sell → reversal
-        engine = FnOEngine(sl_points=9999, tp_points=9999)
-        result = engine.run(df, vix_series, expiry_week=4)  # far expiry
+        engine = FnOEngine(sl_points=9999, tp_points=9999, min_signal_strength=0)
+        result = engine.run(df, vix_series, expiry_week=4)
         has_reversal = any(
             t.exit_reason == FnOExitReason.SIGNAL_REVERSAL
             for t in result.trades
@@ -328,7 +326,7 @@ class TestFnOEngine:
         assert has_reversal
 
     def test_greeks_populated(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         if result.trades:
             trade = result.trades[0]
@@ -338,20 +336,20 @@ class TestFnOEngine:
             assert "iv" in trade.greeks_entry
 
     def test_premium_entry_positive(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         for trade in result.trades:
             assert trade.premium_entry > 0
 
     def test_custom_lot_size(self, signals_buy_only, vix_series):
-        engine = FnOEngine(lot_size=50, num_lots=2)
+        engine = FnOEngine(lot_size=50, num_lots=2, min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         if result.trades:
             assert result.trades[0].lot_size == 50
             assert result.trades[0].num_lots == 2
 
     def test_result_params_stored(self, signals_buy_only, vix_series):
-        engine = FnOEngine(sl_points=40, tp_points=60)
+        engine = FnOEngine(sl_points=40, tp_points=60, min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series, strike_offset=1, expiry_week=2)
         assert result.params["sl_points"] == 40
         assert result.params["tp_points"] == 60
@@ -369,14 +367,20 @@ class TestFnOEngine:
             "volume": [1000] * 40,
             "signal": [0] * 40,
         }, index=dates)
-        # Three buy signals spaced apart
         df.iloc[2, df.columns.get_loc("signal")] = 1
-        df.iloc[15, df.columns.get_loc("signal")] = -1  # reversal closes first, opens PE
-        df.iloc[30, df.columns.get_loc("signal")] = 1   # reversal closes second, opens CE
+        df.iloc[15, df.columns.get_loc("signal")] = -1
+        df.iloc[30, df.columns.get_loc("signal")] = 1
 
-        engine = FnOEngine(sl_points=9999, tp_points=9999)
+        engine = FnOEngine(sl_points=9999, tp_points=9999, min_signal_strength=0)
         result = engine.run(df, vix_series)
         assert result.num_trades >= 2
+
+    def test_min_signal_strength_filters(self, signals_buy_only, vix_series):
+        """High min_signal_strength should filter out weak signals."""
+        engine_strict = FnOEngine(min_signal_strength=4)
+        result = engine_strict.run(signals_buy_only, vix_series)
+        # Test data has no indicator columns → strength=0 → all filtered
+        assert result.num_trades == 0
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +457,7 @@ class TestCheckExit:
     def test_signal_reversal_ce_with_sell(self):
         """CE position + sell signal → reversal exit."""
         pos = self._make_position(option_type="CE", expiry_days_ahead=14)
-        engine = FnOEngine()
+        engine = FnOEngine(sl_points=9999, tp_points=9999)
         _, reason = engine._check_exit(
             pos, 22000, dt.date(2024, 1, 11), 0.13, -1
         )
@@ -462,7 +466,7 @@ class TestCheckExit:
     def test_signal_reversal_pe_with_buy(self):
         """PE position + buy signal → reversal exit."""
         pos = self._make_position(option_type="PE", expiry_days_ahead=14)
-        engine = FnOEngine()
+        engine = FnOEngine(sl_points=9999, tp_points=9999)
         _, reason = engine._check_exit(
             pos, 22000, dt.date(2024, 1, 11), 0.13, 1
         )
@@ -493,27 +497,31 @@ class TestCheckExit:
 
 class TestRunFnOAnalysis:
     def test_returns_dataframe(self, signals_buy_only, vix_series):
-        df = run_fno_analysis(signals_buy_only, vix_series, num_otm=1, num_expiries=1)
+        df = run_fno_analysis(signals_buy_only, vix_series,
+                              num_otm=1, num_expiries=1, min_signal_strength=0)
         assert isinstance(df, pd.DataFrame)
 
     def test_columns_present(self, signals_buy_only, vix_series):
-        df = run_fno_analysis(signals_buy_only, vix_series, num_otm=1, num_expiries=1)
+        df = run_fno_analysis(signals_buy_only, vix_series,
+                              num_otm=1, num_expiries=1, min_signal_strength=0)
         if not df.empty:
             assert "strike_type" in df.columns
             assert "total_pnl" in df.columns
             assert "win_rate" in df.columns
 
     def test_sorted_by_pnl(self, signals_buy_only, vix_series):
-        df = run_fno_analysis(signals_buy_only, vix_series, num_otm=2, num_expiries=2)
+        df = run_fno_analysis(signals_buy_only, vix_series,
+                              num_otm=2, num_expiries=2, min_signal_strength=0)
         if len(df) > 1:
             assert df["total_pnl"].iloc[0] >= df["total_pnl"].iloc[1]
 
     def test_no_signals_empty_result(self, signals_no_signals, vix_series):
-        df = run_fno_analysis(signals_no_signals, vix_series)
+        df = run_fno_analysis(signals_no_signals, vix_series, min_signal_strength=0)
         assert df.empty
 
     def test_strike_labels(self, signals_buy_only, vix_series):
-        df = run_fno_analysis(signals_buy_only, vix_series, num_otm=2, num_expiries=1)
+        df = run_fno_analysis(signals_buy_only, vix_series,
+                              num_otm=2, num_expiries=1, min_signal_strength=0)
         if not df.empty:
             labels = set(df["strike_type"].values)
             assert "ATM" in labels or any("OTM" in l for l in labels)
@@ -525,13 +533,13 @@ class TestRunFnOAnalysis:
 
 class TestBuildFnOTradeLog:
     def test_returns_dataframe(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         log = build_fno_trade_log(result)
         assert isinstance(log, pd.DataFrame)
 
     def test_log_columns(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         log = build_fno_trade_log(result)
         if not log.empty:
@@ -549,7 +557,7 @@ class TestBuildFnOTradeLog:
         assert log.empty
 
     def test_log_row_count(self, signals_buy_only, vix_series):
-        engine = FnOEngine()
+        engine = FnOEngine(min_signal_strength=0)
         result = engine.run(signals_buy_only, vix_series)
         log = build_fno_trade_log(result)
         assert len(log) == result.num_trades
@@ -565,7 +573,7 @@ class TestFNODefaults:
             "lot_size", "num_lots", "sl_points", "tp_points",
             "tsl_points", "tsl_activation", "strike_interval",
             "risk_free_rate", "exit_before_expiry_days",
-            "num_otm_strikes", "num_expiries",
+            "num_otm_strikes", "num_expiries", "min_signal_strength",
         }
         assert set(FNO_DEFAULTS.keys()) == expected_keys
 
@@ -574,3 +582,10 @@ class TestFNODefaults:
 
     def test_strike_interval_matches(self):
         assert FNO_DEFAULTS["strike_interval"] == STRIKE_INTERVAL
+
+    def test_asymmetric_sl_tp(self):
+        """SL should be wider than TP for better risk-reward."""
+        assert FNO_DEFAULTS["sl_points"] > FNO_DEFAULTS["tp_points"]
+
+    def test_min_signal_strength_default(self):
+        assert FNO_DEFAULTS["min_signal_strength"] == 2

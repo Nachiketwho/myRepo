@@ -3,9 +3,9 @@
 Nifty options:
     - Strike interval: 50 points
     - Lot size: 25 (as of 2024, configurable)
-    - Weekly expiry: every Thursday
-    - Monthly expiry: last Thursday of month
-    - If Thursday is an NSE holiday, expiry moves to previous trading day
+    - Weekly expiry: every Tuesday (changed from Thursday mid-2024)
+    - Monthly expiry: last Tuesday of month
+    - If Tuesday is an NSE holiday, expiry moves to previous trading day
 """
 
 import datetime as dt
@@ -92,8 +92,8 @@ def is_trading_day(d: dt.date) -> bool:
 
 
 def adjust_expiry(d: dt.date) -> dt.date:
-    """If the expiry date (Thursday) is an NSE holiday, move to previous
-    trading day. This matches real NSE behavior."""
+    """If the expiry date is an NSE holiday, move to previous trading day.
+    This matches real NSE behavior."""
     while not is_trading_day(d):
         d -= dt.timedelta(days=1)
     return d
@@ -145,13 +145,13 @@ def get_strike_range(
 def next_expiry_dates(from_date: dt.date, count: int = 4) -> list[dt.date]:
     """Return the next *count* expiry dates from (but not including) from_date.
 
-    Expiry is normally Thursday (weekday 3). If that Thursday is an NSE
+    Expiry is normally Tuesday (weekday 1). If that Tuesday is an NSE
     holiday, the expiry moves to the previous trading day.
     """
     expiries = []
     d = from_date + dt.timedelta(days=1)
     while len(expiries) < count:
-        if d.weekday() == 3:  # Thursday
+        if d.weekday() == 1:  # Tuesday
             actual_expiry = adjust_expiry(d)
             expiries.append(actual_expiry)
         d += dt.timedelta(days=1)

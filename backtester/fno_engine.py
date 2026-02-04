@@ -19,7 +19,7 @@ import numpy as np
 
 from backtester.greeks import bs_price, greeks_snapshot
 from backtester.strikes import (
-    get_atm_strike, get_strike_range, next_thursdays,
+    get_atm_strike, get_strike_range, next_expiry_dates,
     time_to_expiry_years, days_to_expiry, describe_strike,
     LOT_SIZE, STRIKE_INTERVAL,
 )
@@ -32,15 +32,16 @@ from backtester.strikes import (
 FNO_DEFAULTS = {
     "lot_size": LOT_SIZE,
     "num_lots": 1,
-    "sl_points": 50.0,
-    "tp_points": 50.0,
-    "tsl_points": 25.0,       # trail by 25pts after premium rises
-    "tsl_activation": 30.0,   # activate trailing SL after 30pt rise
+    "sl_points": 60.0,
+    "tp_points": 35.0,
+    "tsl_points": 20.0,       # trail by 20pts after premium rises
+    "tsl_activation": 20.0,   # activate trailing SL after 20pt rise
     "strike_interval": STRIKE_INTERVAL,
     "risk_free_rate": 0.07,
     "exit_before_expiry_days": 1,
     "num_otm_strikes": 4,     # ATM + 4 OTM = 5 strikes
-    "num_expiries": 4,        # next 4 Thursdays
+    "num_expiries": 4,        # next 4 Tuesdays
+    "min_signal_strength": 2, # require at least 2 confirmations
 }
 
 
@@ -243,15 +244,15 @@ class FnOEngine:
 
     def __init__(
         self,
-        sl_points: float = 50.0,
-        tp_points: float = 50.0,
-        tsl_points: float = 25.0,
-        tsl_activation: float = 30.0,
+        sl_points: float = 60.0,
+        tp_points: float = 35.0,
+        tsl_points: float = 20.0,
+        tsl_activation: float = 20.0,
         lot_size: int = LOT_SIZE,
         num_lots: int = 1,
         risk_free_rate: float = 0.07,
         exit_before_expiry_days: int = 1,
-        min_signal_strength: int = 0,
+        min_signal_strength: int = 2,
         min_premium: float = 0.0,
         min_delta: float = 0.0,
     ):
@@ -281,7 +282,7 @@ class FnOEngine:
             vix_series: India VIX daily close indexed by date.
                         Values in % (e.g. 13.5 = 13.5%).
             strike_offset: 0=ATM, 1=1-OTM, 2=2-OTM, etc.
-            expiry_week: 1=next Thursday, 2=Thursday after, etc.
+            expiry_week: 1=next Tuesday, 2=Tuesday after, etc.
 
         Returns:
             FnOResult with all trades for this strike/expiry combo.
@@ -341,8 +342,8 @@ class FnOEngine:
                         strike = atm - strike_offset * STRIKE_INTERVAL
 
                 # Select expiry
-                expiries = next_thursdays(current_date, count=expiry_week)
-                expiry = expiries[-1]  # the Nth Thursday
+                expiries = next_expiry_dates(current_date, count=expiry_week)
+                expiry = expiries[-1]  # the Nth Tuesday
 
                 T = time_to_expiry_years(current_date, expiry)
                 if T <= 0:
