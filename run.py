@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import os
+from datetime import datetime
 import pandas as pd
 
 from backtester.data import fetch_nifty50, TIMEFRAMES, validate_ohlcv
@@ -35,7 +36,7 @@ def _grids_for_timeframe(tf: str):
     return PARAM_GRID, ENGINE_PARAM_GRID
 
 
-def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
+def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str, timestamp: str = ""):
     """Run strategy, optimize, find missed trades, export CSV for one timeframe."""
     defaults = get_defaults(label)
     vwap_win = defaults.get("vwap_window")
@@ -106,8 +107,8 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         best_result = best_engine.run(best_signals)
 
         # Export best-param results
-        tl_path = os.path.join(output_dir, f"trade_log_{label}.csv")
-        sm_path = os.path.join(output_dir, f"summary_{label}.csv")
+        tl_path = os.path.join(output_dir, f"trade_log_{label}_{timestamp}.csv")
+        sm_path = os.path.join(output_dir, f"summary_{label}_{timestamp}.csv")
         export_csv(best_result, tl_path, sm_path)
         print(f"\n  Exported: {tl_path}, {sm_path}")
 
@@ -117,7 +118,7 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         print(log.to_string(index=False))
 
         # Export optimizer results
-        opt_path = os.path.join(output_dir, f"optimizer_{label}.csv")
+        opt_path = os.path.join(output_dir, f"optimizer_{label}_{timestamp}.csv")
         opt_results.to_csv(opt_path, index=False)
         print(f"\n  Optimizer results: {opt_path}")
     else:
@@ -135,7 +136,7 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
     print(f"\n--- Missed Trades ({len(missed)} near-misses) ---")
     if not missed.empty:
         print(missed.head(10).to_string(index=False))
-        missed_path = os.path.join(output_dir, f"missed_trades_{label}.csv")
+        missed_path = os.path.join(output_dir, f"missed_trades_{label}_{timestamp}.csv")
         missed.to_csv(missed_path, index=False)
         print(f"\n  Full list: {missed_path}")
     else:
@@ -146,6 +147,7 @@ def run_fno_for_timeframe(
     df: pd.DataFrame, label: str, output_dir: str,
     sl_points: float = 50.0, tp_points: float = 50.0,
     num_otm: int = 4, num_expiries: int = 4,
+    timestamp: str = "",
 ):
     """Run F&O strike × expiry analysis for one timeframe."""
     defaults = get_defaults(label)
@@ -205,7 +207,7 @@ def run_fno_for_timeframe(
     print(summary.to_string(index=False))
 
     # Export summary
-    summary_path = os.path.join(output_dir, f"fno_summary_{label}.csv")
+    summary_path = os.path.join(output_dir, f"fno_summary_{label}_{timestamp}.csv")
     summary.to_csv(summary_path, index=False)
     print(f"\n  Summary: {summary_path}")
 
@@ -225,7 +227,7 @@ def run_fno_for_timeframe(
     print(f"\n--- Trade Log (best combo, {len(trade_log)} trades) ---")
     print(trade_log.to_string(index=False))
 
-    log_path = os.path.join(output_dir, f"fno_trades_{label}.csv")
+    log_path = os.path.join(output_dir, f"fno_trades_{label}_{timestamp}.csv")
     trade_log.to_csv(log_path, index=False)
     print(f"\n  Trade log: {log_path}")
 
@@ -251,6 +253,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for tf in args.timeframes:
         df = fetch_nifty50(timeframe=tf)
@@ -269,9 +272,10 @@ def main():
                 tp_points=args.tp_points,
                 num_otm=args.num_otm,
                 num_expiries=args.num_expiries,
+                timestamp=run_ts,
             )
         else:
-            run_for_timeframe(df, tf, args.output)
+            run_for_timeframe(df, tf, args.output, timestamp=run_ts)
 
     print(f"\n{'='*60}")
     print(f"  All CSVs saved to: {args.output}/")
