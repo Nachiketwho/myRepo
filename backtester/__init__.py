@@ -8,6 +8,15 @@ from backtester.optimizer import run_optimization, best_params
 from backtester.missed_trades import find_missed_trades
 from backtester.report import build_summary, build_trade_log, format_report, export_csv
 from backtester.data import fetch_nifty50  # noqa: lazy yf import inside
+from backtester.greeks import bs_price, greeks_snapshot, implied_vol
+from backtester.strikes import (
+    get_atm_strike, get_otm_strikes, get_strike_range,
+    next_thursdays, LOT_SIZE, STRIKE_INTERVAL,
+)
+from backtester.fno_engine import (
+    FnOEngine, FnOTrade, FnOResult, FnOExitReason,
+    FNO_DEFAULTS, run_fno_analysis, build_fno_trade_log,
+)
 
 __all__ = [
     "vwap",
@@ -30,4 +39,23 @@ __all__ = [
     "format_report",
     "export_csv",
     "fetch_nifty50",
+    # Black-Scholes & Greeks
+    "bs_price",
+    "greeks_snapshot",
+    "implied_vol",
+    # Strike selection & expiry
+    "get_atm_strike",
+    "get_otm_strikes",
+    "get_strike_range",
+    "next_thursdays",
+    "LOT_SIZE",
+    "STRIKE_INTERVAL",
+    # F&O engine
+    "FnOEngine",
+    "FnOTrade",
+    "FnOResult",
+    "FnOExitReason",
+    "FNO_DEFAULTS",
+    "run_fno_analysis",
+    "build_fno_trade_log",
 ]

@@ -4,6 +4,8 @@ Usage:
     python run.py                        # fetches live data from Yahoo Finance
     python run.py --timeframes daily weekly 5min
     python run.py --timeframes 15min     # uses 15min-specific parameters
+    python run.py --fno                  # F&O analysis (ATM + OTM × 4 expiries)
+    python run.py --fno --timeframes 15min
 """
 
 import argparse
@@ -20,6 +22,10 @@ from backtester.engine import BacktestEngine
 from backtester.optimizer import run_optimization
 from backtester.missed_trades import find_missed_trades
 from backtester.report import format_report, export_csv, build_trade_log
+from backtester.data import fetch_india_vix
+from backtester.fno_engine import (
+    FnOEngine, FNO_DEFAULTS, run_fno_analysis, build_fno_trade_log,
+)
 
 
 def _grids_for_timeframe(tf: str):
@@ -136,6 +142,94 @@ def run_for_timeframe(df: pd.DataFrame, label: str, output_dir: str):
         print("  None found.")
 
 
+def run_fno_for_timeframe(
+    df: pd.DataFrame, label: str, output_dir: str,
+    sl_points: float = 50.0, tp_points: float = 50.0,
+    num_otm: int = 4, num_expiries: int = 4,
+):
+    """Run F&O strike × expiry analysis for one timeframe."""
+    defaults = get_defaults(label)
+    vwap_win = defaults.get("vwap_window")
+
+    print(f"\n{'='*60}")
+    print(f"  F&O ANALYSIS: {label}  ({len(df)} bars)")
+    print(f"  Range: {df.index[0].date()} → {df.index[-1].date()}")
+    print(f"  SL={sl_points}pts, TP={tp_points}pts, "
+          f"strikes=ATM+{num_otm} OTM, expiries={num_expiries}")
+    print(f"{'='*60}")
+
+    # Generate signals from spot strategy
+    strategy = VolumeStrategy(
+        band_multiplier_inner=defaults["band_multiplier_inner"],
+        band_multiplier_outer=defaults["band_multiplier_outer"],
+        vwap_window=vwap_win,
+        obv_lookback=defaults["obv_lookback"],
+        ad_lookback=defaults["ad_lookback"],
+    )
+    signals = strategy.generate_signals(df)
+    num_signals = (signals["signal"] != 0).sum()
+    print(f"\n  Spot signals generated: {num_signals} "
+          f"({(signals['signal']==1).sum()} buy, "
+          f"{(signals['signal']==-1).sum()} sell)")
+
+    if num_signals == 0:
+        print("  No signals — skipping F&O analysis.")
+        return
+
+    # Fetch India VIX
+    print("  Fetching India VIX...")
+    try:
+        vix = fetch_india_vix()
+        print(f"  VIX data: {len(vix)} days "
+              f"(mean={vix.mean():.1f}%, last={vix.iloc[-1]:.1f}%)")
+    except Exception as e:
+        print(f"  VIX fetch failed ({e}), using default IV=15%")
+        vix = pd.Series(dtype=float)
+
+    # Run strike × expiry sweep
+    print(f"\n  Running {num_otm + 1} strikes × {num_expiries} expiries "
+          f"= {(num_otm + 1) * num_expiries} combos...")
+    summary = run_fno_analysis(
+        signals, vix,
+        num_otm=num_otm,
+        num_expiries=num_expiries,
+        sl_points=sl_points,
+        tp_points=tp_points,
+    )
+
+    if summary.empty:
+        print("  No trades generated across any combo.")
+        return
+
+    print(f"\n--- F&O Strike × Expiry Summary ({len(summary)} combos with trades) ---")
+    print(summary.to_string(index=False))
+
+    # Export summary
+    summary_path = os.path.join(output_dir, f"fno_summary_{label}.csv")
+    summary.to_csv(summary_path, index=False)
+    print(f"\n  Summary: {summary_path}")
+
+    # Show best combo trade log
+    best = summary.iloc[0]
+    print(f"\n--- Best combo: {best['strike_type']} / week {int(best['expiry_week'])} ---")
+    print(f"  Trades={int(best['num_trades'])}, PnL={best['total_pnl']:.2f}, "
+          f"WR={best['win_rate']:.1f}%, Avg hold={best['avg_hold_days']:.1f}d")
+
+    engine = FnOEngine(sl_points=sl_points, tp_points=tp_points)
+    best_result = engine.run(
+        signals, vix,
+        strike_offset=int(best["strike_offset"]),
+        expiry_week=int(best["expiry_week"]),
+    )
+    trade_log = build_fno_trade_log(best_result)
+    print(f"\n--- Trade Log (best combo, {len(trade_log)} trades) ---")
+    print(trade_log.to_string(index=False))
+
+    log_path = os.path.join(output_dir, f"fno_trades_{label}.csv")
+    trade_log.to_csv(log_path, index=False)
+    print(f"\n  Trade log: {log_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Nifty50 Backtester")
     parser.add_argument(
@@ -144,13 +238,33 @@ def main():
         help="Timeframes to test (default: daily)",
     )
     parser.add_argument("--output", default="output", help="Output directory for CSVs")
+    parser.add_argument("--fno", action="store_true",
+                        help="Run F&O strike × expiry analysis")
+    parser.add_argument("--sl-points", type=float, default=50.0,
+                        help="F&O stop-loss in premium points (default: 50)")
+    parser.add_argument("--tp-points", type=float, default=50.0,
+                        help="F&O take-profit in premium points (default: 50)")
+    parser.add_argument("--num-otm", type=int, default=4,
+                        help="Number of OTM strikes to test (default: 4)")
+    parser.add_argument("--num-expiries", type=int, default=4,
+                        help="Number of weekly expiries to test (default: 4)")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
 
     for tf in args.timeframes:
         df = fetch_nifty50(timeframe=tf)
-        run_for_timeframe(df, tf, args.output)
+
+        if args.fno:
+            run_fno_for_timeframe(
+                df, tf, args.output,
+                sl_points=args.sl_points,
+                tp_points=args.tp_points,
+                num_otm=args.num_otm,
+                num_expiries=args.num_expiries,
+            )
+        else:
+            run_for_timeframe(df, tf, args.output)
 
     print(f"\n{'='*60}")
     print(f"  All CSVs saved to: {args.output}/")

@@ -2,6 +2,7 @@ import pandas as pd
 
 
 NIFTY50_SYMBOL = "^NSEI"
+INDIA_VIX_SYMBOL = "^INDIAVIX"
 
 TIMEFRAMES = {
     "daily": "1d",
@@ -74,3 +75,36 @@ def fetch_nifty50(
         df["volume"] = 1
 
     return df
+
+
+def fetch_india_vix(
+    period: str = "2y",
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.Series:
+    """Fetch India VIX daily close from Yahoo Finance.
+
+    Returns a Series of VIX values (annualized vol in %) indexed by date.
+    For Black-Scholes, divide by 100 to get decimal form.
+    """
+    import yfinance as yf
+
+    ticker = yf.Ticker(INDIA_VIX_SYMBOL)
+
+    kwargs = {"interval": "1d"}
+    if start and end:
+        kwargs["start"] = start
+        kwargs["end"] = end
+    else:
+        kwargs["period"] = period
+
+    df = ticker.history(**kwargs)
+
+    if df.empty:
+        raise ValueError(f"No VIX data returned for {INDIA_VIX_SYMBOL}")
+
+    df.columns = [c.lower() for c in df.columns]
+    vix = df["close"]
+    vix.index = vix.index.date if hasattr(vix.index, 'date') else vix.index
+    vix.index.name = "date"
+    return vix
