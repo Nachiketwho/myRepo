@@ -25,6 +25,13 @@ from backtester.fno_optimizer import (
     run_fno_optimization, best_fno_params,
     FNO_PARAM_GRID, FNO_SL_GRID, FNO_RR_GRID, FNO_EMA_GRID, FNO_STRENGTH_GRID,
 )
+from backtester.ema_crossover import (
+    EMACrossoverEngine, EMACrossoverResult, EMACrossoverTrade,
+    SLStrategy, PositionSizing, SLCalculator, PositionSizer,
+    EMACrossoverSignals, EMA_PAIRS,
+    run_ema_backtest_grid, build_ema_trade_log, compare_for_trading_style,
+    ema, atr, swing_high, swing_low,
+)
 
 __all__ = [
     "vwap",
@@ -87,4 +94,21 @@ __all__ = [
     "FNO_RR_GRID",
     "FNO_EMA_GRID",
     "FNO_STRENGTH_GRID",
+    # EMA crossover strategy
+    "EMACrossoverEngine",
+    "EMACrossoverResult",
+    "EMACrossoverTrade",
+    "SLStrategy",
+    "PositionSizing",
+    "SLCalculator",
+    "PositionSizer",
+    "EMACrossoverSignals",
+    "EMA_PAIRS",
+    "run_ema_backtest_grid",
+    "build_ema_trade_log",
+    "compare_for_trading_style",
+    "ema",
+    "atr",
+    "swing_high",
+    "swing_low",
 ]
