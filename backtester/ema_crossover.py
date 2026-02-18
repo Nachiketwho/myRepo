@@ -30,6 +30,25 @@ class PositionSizing(Enum):
     KELLY = "kelly"
 
 
+class TrailingMode(Enum):
+    """Trailing stop loss modes."""
+    NONE = "none"           # No trailing - fixed SL
+    BREAKEVEN = "breakeven" # Move SL to breakeven at 1R profit
+    STEPPED = "stepped"     # Stepped trailing at milestones
+
+
+# Trailing SL milestones (as multiples of initial SL/risk)
+# (profit_multiple, lock_multiple)
+# e.g. (1.0, 0.0) → at 1R profit, lock at breakeven
+#      (2.0, 1.0) → at 2R profit, lock 1R
+TRAIL_MILESTONES = [
+    (1.0, 0.0),   # At 1:1, move SL to breakeven
+    (1.5, 0.5),   # At 1:1.5, lock 0.5R profit
+    (2.0, 1.0),   # At 1:2, lock 1R profit
+    (2.5, 1.5),   # At 1:2.5, lock 1.5R profit
+]
+
+
 # Default EMA pairs to test
 EMA_PAIRS = [
     (5, 9),
@@ -50,6 +69,8 @@ DEFAULT_CONFIG = {
     "capital": 100000.0,
     "risk_per_trade_pct": 1.0,
     "lot_size": 25,  # Nifty lot size
+    "trailing_mode": TrailingMode.NONE,  # No trailing by default
+    "trail_milestones": TRAIL_MILESTONES,  # Custom milestones
 }
 
 
@@ -273,6 +294,13 @@ class EMACrossoverTrade:
     tp_points: float = 0.0
     rr_ratio: float = 2.0
 
+    # Trailing SL
+    trailing_mode: str = "none"
+    initial_sl_level: float = 0.0  # Original SL level before trailing
+    tsl_level: float = 0.0  # Current trailing SL level
+    active_milestone: int = -1  # Index of active trailing milestone
+    trail_events: list = field(default_factory=list)  # History of SL updates
+
     # Position sizing
     num_lots: int = 1
     qty: int = 25
@@ -461,7 +489,13 @@ class EMACrossoverResult:
 # ---------------------------------------------------------------------------
 
 class EMACrossoverEngine:
-    """Backtest engine for EMA crossover strategy."""
+    """Backtest engine for EMA crossover strategy.
+
+    Supports trailing SL modes:
+        - NONE: Fixed SL (default)
+        - BREAKEVEN: Move SL to breakeven when price hits 1R profit
+        - STEPPED: Progressive trailing at milestones (1R, 1.5R, 2R, 2.5R)
+    """
 
     def __init__(
         self,
@@ -470,6 +504,7 @@ class EMACrossoverEngine:
         sl_strategy: SLStrategy = SLStrategy.ATR,
         position_sizing: PositionSizing = PositionSizing.RISK_BASED,
         tp_rr_ratio: float = 2.0,
+        trailing_mode: TrailingMode = TrailingMode.NONE,
         **config,
     ):
         self.ema_fast = ema_fast
@@ -477,9 +512,12 @@ class EMACrossoverEngine:
         self.sl_strategy = sl_strategy
         self.position_sizing = position_sizing
         self.tp_rr_ratio = tp_rr_ratio
+        self.trailing_mode = trailing_mode
 
         # Merge with defaults
         self.config = {**DEFAULT_CONFIG, **config}
+        self.config["trailing_mode"] = trailing_mode
+        self.trail_milestones = self.config.get("trail_milestones", TRAIL_MILESTONES)
 
         # Initialize components
         self.signal_gen = EMACrossoverSignals(ema_fast, ema_slow)
@@ -497,6 +535,65 @@ class EMACrossoverEngine:
             risk_per_trade_pct=self.config["risk_per_trade_pct"],
             lot_size=self.config["lot_size"],
         )
+
+    def _build_trail_thresholds(
+        self, entry_price: float, sl_points: float, direction: int
+    ) -> list[tuple[float, float]]:
+        """Build price thresholds for trailing SL.
+
+        Returns list of (profit_threshold_price, new_sl_level) tuples.
+        """
+        thresholds = []
+        for profit_mult, lock_mult in self.trail_milestones:
+            if direction == 1:  # Long
+                threshold_price = entry_price + sl_points * profit_mult
+                new_sl = entry_price + sl_points * lock_mult
+            else:  # Short
+                threshold_price = entry_price - sl_points * profit_mult
+                new_sl = entry_price - sl_points * lock_mult
+            thresholds.append((threshold_price, new_sl))
+        return thresholds
+
+    def _update_trailing_sl(
+        self, position: EMACrossoverTrade, high: float, low: float, timestamp
+    ) -> None:
+        """Update trailing SL based on price movement."""
+        if self.trailing_mode == TrailingMode.NONE:
+            return
+
+        thresholds = self._build_trail_thresholds(
+            position.entry_price, position.sl_points, position.direction
+        )
+
+        if self.trailing_mode == TrailingMode.BREAKEVEN:
+            # Only use first milestone (1:1 → breakeven)
+            thresholds = thresholds[:1] if thresholds else []
+
+        # Check each milestone
+        for i, (threshold_price, new_sl) in enumerate(thresholds):
+            if i <= position.active_milestone:
+                continue  # Already passed this milestone
+
+            triggered = False
+            if position.direction == 1:  # Long
+                triggered = high >= threshold_price
+                # Only move SL up (more protective)
+                if triggered and new_sl > position.tsl_level:
+                    position.tsl_level = new_sl
+            else:  # Short
+                triggered = low <= threshold_price
+                # Only move SL down (more protective)
+                if triggered and new_sl < position.tsl_level:
+                    position.tsl_level = new_sl
+
+            if triggered:
+                position.active_milestone = i
+                position.trail_events.append({
+                    "timestamp": timestamp,
+                    "milestone": i,
+                    "price_trigger": threshold_price,
+                    "new_sl": new_sl,
+                })
 
     def _prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add all required indicators."""
@@ -528,18 +625,29 @@ class EMACrossoverEngine:
                 exit_reason = None
                 exit_price = None
 
-                # Check SL
+                # Use trailing SL if active, otherwise initial SL
+                active_sl = position.tsl_level if position.tsl_level != 0 else position.sl_level
+
+                # Check SL (use trailing SL level)
                 if position.direction == 1:  # Long
-                    if row["low"] <= position.sl_level:
-                        exit_reason = "sl_hit"
-                        exit_price = position.sl_level
+                    if row["low"] <= active_sl:
+                        # Determine if this is trailing SL or initial SL
+                        if position.active_milestone >= 0:
+                            exit_reason = "trailing_sl"
+                        else:
+                            exit_reason = "sl_hit"
+                        exit_price = active_sl
                     elif row["high"] >= position.tp_level:
                         exit_reason = "tp_hit"
                         exit_price = position.tp_level
                 else:  # Short
-                    if row["high"] >= position.sl_level:
-                        exit_reason = "sl_hit"
-                        exit_price = position.sl_level
+                    if row["high"] >= active_sl:
+                        # Determine if this is trailing SL or initial SL
+                        if position.active_milestone >= 0:
+                            exit_reason = "trailing_sl"
+                        else:
+                            exit_reason = "sl_hit"
+                        exit_price = active_sl
                     elif row["low"] <= position.tp_level:
                         exit_reason = "tp_hit"
                         exit_price = position.tp_level
@@ -559,6 +667,12 @@ class EMACrossoverEngine:
                 position.mae_points = max(position.mae_points, adverse)
                 position.mfe_points = max(position.mfe_points, favorable)
                 position.bars_held += 1
+
+                # Update trailing SL (after checking exits, before next bar)
+                if exit_reason is None:
+                    self._update_trailing_sl(
+                        position, row["high"], row["low"], row.name
+                    )
 
                 # Exit trade
                 if exit_reason:
@@ -594,6 +708,9 @@ class EMACrossoverEngine:
                 # Calculate position size
                 pos_info = self.pos_sizer.calculate(entry_price, sl_info["sl_points"])
 
+                # Initialize trailing SL to initial SL level
+                initial_sl = sl_info["sl_level"]
+
                 position = EMACrossoverTrade(
                     entry_date=row.name,
                     entry_price=entry_price,
@@ -607,6 +724,13 @@ class EMACrossoverEngine:
                     tp_level=tp_level,
                     tp_points=tp_points,
                     rr_ratio=self.tp_rr_ratio,
+                    # Trailing SL fields
+                    trailing_mode=self.trailing_mode.value,
+                    initial_sl_level=initial_sl,
+                    tsl_level=initial_sl,  # Start with initial SL
+                    active_milestone=-1,
+                    trail_events=[],
+                    # Position sizing
                     num_lots=pos_info["num_lots"],
                     qty=pos_info["qty"],
                     position_value=pos_info["position_value"],
@@ -713,6 +837,11 @@ def build_ema_trade_log(result: EMACrossoverResult) -> pd.DataFrame:
             "tp_level": round(t.tp_level, 2),
             "sl_points": round(t.sl_points, 1),
             "sl_strategy": t.sl_strategy,
+            # Trailing SL info
+            "trailing_mode": t.trailing_mode,
+            "tsl_level": round(t.tsl_level, 2) if t.tsl_level else t.sl_level,
+            "trail_milestones_hit": t.active_milestone + 1 if t.active_milestone >= 0 else 0,
+            # Position info
             "num_lots": t.num_lots,
             "qty": t.qty,
             "risk_amount": round(t.risk_amount, 2),

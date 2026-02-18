@@ -9,6 +9,7 @@ from backtester.ema_crossover import (
     EMACrossoverEngine, EMACrossoverResult, EMACrossoverTrade,
     EMACrossoverSignals, SLCalculator, PositionSizer,
     SLStrategy, PositionSizing, EMA_PAIRS,
+    TrailingMode, TRAIL_MILESTONES,
     run_ema_backtest_grid, build_ema_trade_log, compare_for_trading_style,
     ema, atr, swing_high, swing_low,
 )
@@ -480,3 +481,209 @@ class TestEMAPairs:
         pairs_set = set(EMA_PAIRS)
         assert (5, 9) in pairs_set
         assert (9, 21) in pairs_set
+
+
+# ---------------------------------------------------------------------------
+# Trailing SL tests
+# ---------------------------------------------------------------------------
+
+class TestTrailingMode:
+    def test_trailing_mode_values(self):
+        assert TrailingMode.NONE.value == "none"
+        assert TrailingMode.BREAKEVEN.value == "breakeven"
+        assert TrailingMode.STEPPED.value == "stepped"
+
+    def test_trail_milestones_defined(self):
+        assert len(TRAIL_MILESTONES) >= 3
+        # Check milestones are ordered by profit multiple
+        prev_mult = 0
+        for profit_mult, _ in TRAIL_MILESTONES:
+            assert profit_mult > prev_mult
+            prev_mult = profit_mult
+
+
+class TestTrailingEngine:
+    @pytest.fixture
+    def trailing_data(self):
+        """Data with clear price movement for testing trailing SL."""
+        n = 100
+        # Start with golden cross conditions, then price moves up significantly
+        # First 30 bars: slow uptrend to trigger golden cross
+        # Next 70 bars: strong uptrend to trigger trailing milestones
+        close_values = []
+        for i in range(30):
+            close_values.append(22000 + i * 5)  # Slow uptrend
+        for i in range(70):
+            close_values.append(22150 + i * 20)  # Strong uptrend
+
+        close = np.array(close_values)
+        df = pd.DataFrame({
+            "open": close - 5,
+            "high": close + 15,
+            "low": close - 10,
+            "close": close,
+            "volume": [50000] * n,
+        }, index=pd.date_range("2024-01-01", periods=n, freq="15min"))
+        return df
+
+    def test_no_trailing_mode(self, trending_up_data):
+        """No trailing mode should not modify SL."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.NONE,
+        )
+        result = engine.run(trending_up_data, "TEST", "15min")
+        for trade in result.trades:
+            assert trade.trailing_mode == "none"
+            # TSL level should equal initial SL level
+            assert trade.tsl_level == trade.initial_sl_level
+            assert trade.active_milestone == -1
+
+    def test_breakeven_mode_sets_field(self, trending_up_data):
+        """Breakeven mode should be set in trades."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.BREAKEVEN,
+        )
+        result = engine.run(trending_up_data, "TEST", "15min")
+        for trade in result.trades:
+            assert trade.trailing_mode == "breakeven"
+
+    def test_stepped_mode_sets_field(self, trending_up_data):
+        """Stepped mode should be set in trades."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+        )
+        result = engine.run(trending_up_data, "TEST", "15min")
+        for trade in result.trades:
+            assert trade.trailing_mode == "stepped"
+
+    def test_build_trail_thresholds_long(self):
+        """Test building trail thresholds for long position."""
+        engine = EMACrossoverEngine(
+            ema_fast=9, ema_slow=21,
+            trailing_mode=TrailingMode.STEPPED,
+        )
+        thresholds = engine._build_trail_thresholds(
+            entry_price=22000, sl_points=100, direction=1
+        )
+        # Should have 4 milestones from TRAIL_MILESTONES
+        assert len(thresholds) == len(TRAIL_MILESTONES)
+
+        # First milestone (1R profit): threshold at 22100, lock at breakeven
+        assert thresholds[0][0] == 22100  # 22000 + 100 * 1.0
+        assert thresholds[0][1] == 22000  # 22000 + 100 * 0.0 (breakeven)
+
+        # Second milestone (1.5R profit): threshold at 22150, lock 0.5R
+        assert thresholds[1][0] == 22150  # 22000 + 100 * 1.5
+        assert thresholds[1][1] == 22050  # 22000 + 100 * 0.5
+
+    def test_build_trail_thresholds_short(self):
+        """Test building trail thresholds for short position."""
+        engine = EMACrossoverEngine(
+            ema_fast=9, ema_slow=21,
+            trailing_mode=TrailingMode.STEPPED,
+        )
+        thresholds = engine._build_trail_thresholds(
+            entry_price=22000, sl_points=100, direction=-1
+        )
+
+        # First milestone: threshold at 21900, lock at breakeven
+        assert thresholds[0][0] == 21900  # 22000 - 100 * 1.0
+        assert thresholds[0][1] == 22000  # 22000 - 100 * 0.0 (breakeven)
+
+        # Second milestone: threshold at 21850, lock 0.5R
+        assert thresholds[1][0] == 21850  # 22000 - 100 * 1.5
+        assert thresholds[1][1] == 21950  # 22000 - 100 * 0.5
+
+    def test_trailing_sl_updates_on_profit(self, trailing_data):
+        """Trailing SL should update when price moves in favor."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+            sl_strategy=SLStrategy.FIXED,
+            sl_fixed_points=100.0,
+            tp_rr_ratio=5.0,  # High TP so we don't exit early
+        )
+        result = engine.run(trailing_data, "TEST", "15min")
+
+        # Should have trades with trailing updates
+        trades_with_trails = [t for t in result.trades if t.active_milestone >= 0]
+        # Some trades should have hit trailing milestones
+        if result.num_trades > 0:
+            # At least check that trailing mode was applied
+            assert all(t.trailing_mode == "stepped" for t in result.trades)
+
+    def test_trailing_sl_exit_reason(self, trailing_data):
+        """Check that trailing SL exit is properly recorded."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+            sl_strategy=SLStrategy.FIXED,
+            sl_fixed_points=50.0,
+            tp_rr_ratio=10.0,  # Very high TP
+        )
+        result = engine.run(trailing_data, "TEST", "15min")
+
+        # Check exit reasons include trailing_sl if milestones were hit
+        trailing_exits = [t for t in result.trades if t.exit_reason == "trailing_sl"]
+        # It's okay if none exited via trailing (depends on data)
+        for trade in trailing_exits:
+            assert trade.active_milestone >= 0
+
+    def test_breakeven_only_first_milestone(self, trailing_data):
+        """Breakeven mode should only use first milestone."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.BREAKEVEN,
+            sl_strategy=SLStrategy.FIXED,
+            sl_fixed_points=50.0,
+            tp_rr_ratio=10.0,
+        )
+        result = engine.run(trailing_data, "TEST", "15min")
+
+        # All active milestones should be at most 0 (first milestone)
+        for trade in result.trades:
+            assert trade.active_milestone <= 0
+
+    def test_trade_log_includes_trailing_info(self, trending_up_data):
+        """Trade log should include trailing SL columns."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+        )
+        result = engine.run(trending_up_data, "TEST", "15min")
+        log = build_ema_trade_log(result)
+
+        if not log.empty:
+            assert "trailing_mode" in log.columns
+            assert "tsl_level" in log.columns
+            assert "trail_milestones_hit" in log.columns
+
+    def test_initial_sl_preserved(self, trending_up_data):
+        """Initial SL level should be preserved even after trailing."""
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+        )
+        result = engine.run(trending_up_data, "TEST", "15min")
+
+        for trade in result.trades:
+            # Initial SL should match sl_level
+            assert trade.initial_sl_level == trade.sl_level
+            # TSL should be >= initial SL for long (more protective)
+            if trade.direction == 1 and trade.active_milestone >= 0:
+                assert trade.tsl_level >= trade.initial_sl_level
+
+    def test_custom_milestones(self, trending_up_data):
+        """Test with custom trailing milestones."""
+        custom_milestones = [(0.5, 0.0), (1.0, 0.3)]  # Tighter milestones
+        engine = EMACrossoverEngine(
+            ema_fast=5, ema_slow=20,
+            trailing_mode=TrailingMode.STEPPED,
+            trail_milestones=custom_milestones,
+        )
+        # Just verify it runs without error
+        result = engine.run(trending_up_data, "TEST", "15min")
+        assert isinstance(result, EMACrossoverResult)

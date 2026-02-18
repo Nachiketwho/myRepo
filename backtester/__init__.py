@@ -29,6 +29,7 @@ from backtester.ema_crossover import (
     EMACrossoverEngine, EMACrossoverResult, EMACrossoverTrade,
     SLStrategy, PositionSizing, SLCalculator, PositionSizer,
     EMACrossoverSignals, EMA_PAIRS,
+    TrailingMode, TRAIL_MILESTONES,
     run_ema_backtest_grid, build_ema_trade_log, compare_for_trading_style,
     ema, atr, swing_high, swing_low,
 )
@@ -104,6 +105,9 @@ __all__ = [
     "PositionSizer",
     "EMACrossoverSignals",
     "EMA_PAIRS",
+    # Trailing SL
+    "TrailingMode",
+    "TRAIL_MILESTONES",
     "run_ema_backtest_grid",
     "build_ema_trade_log",
     "compare_for_trading_style",
