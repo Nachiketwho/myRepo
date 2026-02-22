@@ -1,0 +1,426 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © SVP+VWAP Strategy V2
+// Session Volume Profile + VWAP Combined Strategy
+
+//@version=5
+indicator("SVP + VWAP Strategy V2", shorttitle="SVP+VWAP", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// Session Settings
+grp_session = "Session Settings"
+sessionLookback = input.int(75, "Session Lookback (bars)", minval=20, maxval=200, group=grp_session, tooltip="Number of bars for session volume profile calculation. 75 for 5min, 25 for 15min")
+numBins = input.int(50, "Number of Price Bins", minval=10, maxval=100, group=grp_session)
+valueAreaPct = input.float(0.70, "Value Area %", minval=0.5, maxval=0.9, step=0.05, group=grp_session)
+
+// VWAP Settings
+grp_vwap = "VWAP Settings"
+vwapBandInner = input.float(1.0, "Inner Band StdDev", minval=0.5, maxval=3.0, step=0.1, group=grp_vwap)
+vwapBandOuter = input.float(2.0, "Outer Band StdDev", minval=1.0, maxval=4.0, step=0.1, group=grp_vwap)
+
+// Signal Settings
+grp_signal = "Signal Settings"
+volumeConfirmMult = input.float(1.2, "Volume Confirm Multiplier", minval=1.0, maxval=2.0, step=0.1, group=grp_signal)
+lvnVolumeSurge = input.float(1.5, "LVN Volume Surge Multiplier", minval=1.2, maxval=3.0, step=0.1, group=grp_signal)
+pocBreakBars = input.int(3, "POC Break Confirmation Bars", minval=1, maxval=5, group=grp_signal)
+pocMigrateSessions = input.int(3, "POC Migration Sessions", minval=2, maxval=5, group=grp_signal)
+pocMigrateThreshold = input.float(0.002, "POC Migration Threshold %", minval=0.001, maxval=0.01, step=0.001, group=grp_signal)
+lvnThreshold = input.float(0.3, "LVN Threshold (fraction of avg)", minval=0.1, maxval=0.5, step=0.05, group=grp_signal)
+
+// Display Settings
+grp_display = "Display Settings"
+showVWAP = input.bool(true, "Show VWAP", group=grp_display)
+showVWAPBands = input.bool(true, "Show VWAP Bands", group=grp_display)
+showSVPLevels = input.bool(true, "Show POC/VAH/VAL", group=grp_display)
+showSignals = input.bool(true, "Show Trade Signals", group=grp_display)
+showLVNZones = input.bool(false, "Show LVN Zones", group=grp_display)
+
+// Colors
+grp_colors = "Colors"
+colPOC = input.color(color.orange, "POC Color", group=grp_colors)
+colVAH = input.color(color.red, "VAH Color", group=grp_colors)
+colVAL = input.color(color.green, "VAL Color", group=grp_colors)
+colVWAP = input.color(color.blue, "VWAP Color", group=grp_colors)
+colBullish = input.color(color.lime, "Bullish Signal", group=grp_colors)
+colBearish = input.color(color.red, "Bearish Signal", group=grp_colors)
+
+// ============================================================================
+// VWAP CALCULATION
+// ============================================================================
+
+// Rolling VWAP with session reset
+typicalPrice = (high + low + close) / 3
+vol = volume == 0 ? 1 : volume
+tpVolume = typicalPrice * vol
+
+// Rolling sums
+rollingTPVol = ta.sma(tpVolume, sessionLookback) * sessionLookback
+rollingVol = ta.sma(vol, sessionLookback) * sessionLookback
+vwapLine = rollingTPVol / rollingVol
+
+// Standard deviation bands
+sqDiff = math.pow(typicalPrice - vwapLine, 2) * vol
+rollingSqDiff = ta.sma(sqDiff, sessionLookback) * sessionLookback
+variance = rollingSqDiff / rollingVol
+vwapStd = math.sqrt(variance)
+
+vwapUpperInner = vwapLine + vwapBandInner * vwapStd
+vwapUpperOuter = vwapLine + vwapBandOuter * vwapStd
+vwapLowerInner = vwapLine - vwapBandInner * vwapStd
+vwapLowerOuter = vwapLine - vwapBandOuter * vwapStd
+
+// ============================================================================
+// SESSION VOLUME PROFILE (Simplified)
+// ============================================================================
+
+// Note: True volume profile requires tick data. This is an approximation
+// using bar-based volume distribution.
+
+// Session high/low
+sessionHigh = ta.highest(high, sessionLookback)
+sessionLow = ta.lowest(low, sessionLookback)
+sessionRange = sessionHigh - sessionLow
+
+// Volume-weighted typical price (approximation of POC)
+var float sumVTP = 0.0
+var float sumVol = 0.0
+
+sumVTP := 0.0
+sumVol := 0.0
+for i = 0 to sessionLookback - 1
+    sumVTP := sumVTP + typicalPrice[i] * volume[i]
+    sumVol := sumVol + volume[i]
+
+poc = sumVol > 0 ? sumVTP / sumVol : close
+
+// Value Area approximation (70% of volume around POC)
+// Using high-volume price zone estimation
+vaRange = sessionRange * (1 - valueAreaPct) / 2
+vah = poc + vaRange + (sessionRange * 0.15)  // Approximate VAH
+val_ = poc - vaRange - (sessionRange * 0.15)  // Approximate VAL
+
+// Clamp to session range
+vah := math.min(vah, sessionHigh)
+val_ := math.max(val_, sessionLow)
+
+// ============================================================================
+// POC MIGRATION TRACKING
+// ============================================================================
+
+// Track POC shift over multiple sessions
+sessionStep = math.max(1, sessionLookback / 2)
+prevSessionIdx = sessionStep * (pocMigrateSessions - 1)
+
+prevPOC = sumVol > 0 ? ta.valuewhen(bar_index % sessionStep == 0, poc, pocMigrateSessions - 1) : poc
+pocShift = prevPOC > 0 ? (poc - prevPOC) / prevPOC : 0.0
+
+// POC migration direction
+pocMigrateDir = pocShift > pocMigrateThreshold ? 1 : pocShift < -pocMigrateThreshold ? -1 : 0
+
+// ============================================================================
+// LVN DETECTION (Simplified)
+// ============================================================================
+
+// LVN zones are areas with significantly lower volume
+// Approximation: areas far from POC with low local volume
+
+avgVolume = ta.sma(volume, sessionLookback)
+localVolume = ta.sma(volume, 5)
+isLVN = localVolume < avgVolume * lvnThreshold
+
+// LVN zone boundaries (simplified)
+lvnHigh = isLVN ? high : na
+lvnLow = isLVN ? low : na
+
+// ============================================================================
+// VOLUME CONFIRMATION
+// ============================================================================
+
+volAvg = ta.sma(volume, sessionLookback)
+volConfirm = volume > volAvg * volumeConfirmMult
+volSurge = volume > volAvg * lvnVolumeSurge
+
+// ============================================================================
+// BARS ABOVE/BELOW LEVELS
+// ============================================================================
+
+barsAbovePOC = ta.barssince(close <= poc)
+barsBelowPOC = ta.barssince(close >= poc)
+barsAboveVAH = ta.barssince(close <= vah)
+barsBelowVAL = ta.barssince(close >= val_)
+
+// ============================================================================
+// SIGNAL GENERATION
+// ============================================================================
+
+var int signal = 0
+var string signalType = ""
+var int signalStrength = 0
+var string tradeInstrument = ""
+
+// Previous bar values
+prevClose = close[1]
+prevVAH = vah[1]
+prevVAL = val_[1]
+prevPOCVal = poc[1]
+
+// V2 Advanced Signals
+vahBreakout = prevClose <= prevVAH and close > vah
+valBreakout = prevClose >= prevVAL and close < val_
+pocMigrateUp = pocMigrateDir == 1
+pocMigrateDown = pocMigrateDir == -1
+
+// LVN Breakout detection
+lvnBreakUp = false
+lvnBreakDown = false
+if volSurge and isLVN[1]
+    if prevClose < lvnLow[1] and close >= lvnLow[1]
+        lvnBreakUp := true
+    if prevClose > lvnHigh[1] and close <= lvnHigh[1]
+        lvnBreakDown := true
+
+// V1 Basic Signals with trend filters
+pocDir = pocMigrateDir
+
+// Bullish V1 signals
+valBounce = low <= val_ and close > val_ and pocDir >= 0  // Trend filter: POC flat or rising
+vwapBounce = low <= vwapLowerInner and close > vwapLowerInner
+pocBreakUp = barsAbovePOC >= pocBreakBars and prevClose <= prevPOCVal
+
+// Bearish V1 signals
+vahReject = high >= vah and close < vah and pocDir <= 0  // Trend filter: POC flat or falling
+vwapReject = high >= vwapUpperInner and close < vwapUpperInner and pocDir <= 0
+pocBreakDown = barsBelowPOC >= pocBreakBars and prevClose >= prevPOCVal
+
+// ============================================================================
+// SIGNAL PRIORITY LOGIC
+// ============================================================================
+
+signal := 0
+signalType := ""
+signalStrength := 0
+tradeInstrument := ""
+
+// --- BULLISH SIGNALS (Priority Order) ---
+
+// V2: VAH breakout with POC migrating up → strong bullish (best signal)
+if vahBreakout and pocMigrateUp
+    signal := 1
+    signalType := "VAH_ACCEPT+POC↑"
+    tradeInstrument := "CALL"
+    signalStrength := 4
+
+// V2: LVN breakout up → explosion trade
+else if lvnBreakUp
+    signal := 1
+    signalType := "LVN_BREAKOUT↑"
+    tradeInstrument := "CALL"
+    signalStrength := 4
+
+// V2: VAH breakout with volume
+else if vahBreakout and volConfirm
+    signal := 1
+    signalType := "VAH_BREAKOUT"
+    tradeInstrument := "CALL"
+    signalStrength := 3
+
+// V2: POC migrating up with volume
+else if pocMigrateUp and volConfirm
+    signal := 1
+    signalType := "POC_MIGRATE↑"
+    tradeInstrument := "CALL"
+    signalStrength := 2
+
+// V1: VAL bounce / VWAP bounce / POC break up
+else if valBounce or vwapBounce or pocBreakUp
+    signal := 1
+    signalStrength := 0
+    if valBounce
+        signalType := "VAL_BOUNCE"
+        signalStrength := signalStrength + 1
+    if vwapBounce
+        signalType := signalType == "" ? "VWAP_BOUNCE" : signalType
+        signalStrength := signalStrength + 1
+    if pocBreakUp
+        signalType := signalType == "" ? "POC_BREAK↑" : signalType
+        signalStrength := signalStrength + 1
+    if volConfirm
+        signalStrength := signalStrength + 1
+    tradeInstrument := "CALL"
+
+// --- BEARISH SIGNALS (Priority Order) ---
+
+// V2: VAL breakout with POC migrating down → strong bearish
+if signal == 0 and valBreakout and pocMigrateDown
+    signal := -1
+    signalType := "VAL_ACCEPT+POC↓"
+    tradeInstrument := "PUT"
+    signalStrength := 4
+
+// V2: LVN breakdown → explosion trade
+else if signal == 0 and lvnBreakDown
+    signal := -1
+    signalType := "LVN_BREAKOUT↓"
+    tradeInstrument := "PUT"
+    signalStrength := 4
+
+// V2: VAL breakout with volume
+else if signal == 0 and valBreakout and volConfirm
+    signal := -1
+    signalType := "VAL_BREAKOUT"
+    tradeInstrument := "PUT"
+    signalStrength := 3
+
+// V2: POC migrating down with volume
+else if signal == 0 and pocMigrateDown and volConfirm
+    signal := -1
+    signalType := "POC_MIGRATE↓"
+    tradeInstrument := "PUT"
+    signalStrength := 2
+
+// V1: VAH reject / VWAP reject / POC break down
+else if signal == 0 and (vahReject or vwapReject or pocBreakDown)
+    signal := -1
+    signalStrength := 0
+    if vahReject
+        signalType := "VAH_REJECT"
+        signalStrength := signalStrength + 1
+    if vwapReject
+        signalType := signalType == "" ? "VWAP_REJECT" : signalType
+        signalStrength := signalStrength + 1
+    if pocBreakDown
+        signalType := signalType == "" ? "POC_BREAK↓" : signalType
+        signalStrength := signalStrength + 1
+    if volConfirm
+        signalStrength := signalStrength + 1
+    tradeInstrument := "PUT"
+
+// Clamp strength
+signalStrength := math.min(signalStrength, 4)
+
+// ============================================================================
+// PLOTTING
+// ============================================================================
+
+// VWAP
+plot(showVWAP ? vwapLine : na, "VWAP", colVWAP, 2)
+plot(showVWAPBands ? vwapUpperInner : na, "VWAP Upper Inner", color.new(colVWAP, 50), 1)
+plot(showVWAPBands ? vwapLowerInner : na, "VWAP Lower Inner", color.new(colVWAP, 50), 1)
+plot(showVWAPBands ? vwapUpperOuter : na, "VWAP Upper Outer", color.new(colVWAP, 70), 1, plot.style_circles)
+plot(showVWAPBands ? vwapLowerOuter : na, "VWAP Lower Outer", color.new(colVWAP, 70), 1, plot.style_circles)
+
+// SVP Levels
+plot(showSVPLevels ? poc : na, "POC", colPOC, 2, plot.style_stepline)
+plot(showSVPLevels ? vah : na, "VAH", colVAH, 1, plot.style_stepline)
+plot(showSVPLevels ? val_ : na, "VAL", colVAL, 1, plot.style_stepline)
+
+// LVN Zones
+bgcolor(showLVNZones and isLVN ? color.new(color.purple, 90) : na, title="LVN Zone")
+
+// ============================================================================
+// SIGNAL MARKERS
+// ============================================================================
+
+// Bullish signals
+plotshape(showSignals and signal == 1 and signalStrength >= 3,
+    title="Strong Buy", location=location.belowbar,
+    style=shape.triangleup, size=size.normal, color=colBullish,
+    text="")
+
+plotshape(showSignals and signal == 1 and signalStrength < 3 and signalStrength > 0,
+    title="Buy", location=location.belowbar,
+    style=shape.triangleup, size=size.small, color=color.new(colBullish, 30),
+    text="")
+
+// Bearish signals
+plotshape(showSignals and signal == -1 and signalStrength >= 3,
+    title="Strong Sell", location=location.abovebar,
+    style=shape.triangledown, size=size.normal, color=colBearish,
+    text="")
+
+plotshape(showSignals and signal == -1 and signalStrength < 3 and signalStrength > 0,
+    title="Sell", location=location.abovebar,
+    style=shape.triangledown, size=size.small, color=color.new(colBearish, 30),
+    text="")
+
+// ============================================================================
+// SIGNAL LABELS
+// ============================================================================
+
+if showSignals and signal != 0 and signalStrength >= 2
+    labelColor = signal == 1 ? colBullish : colBearish
+    labelStyle = signal == 1 ? label.style_label_up : label.style_label_down
+    labelY = signal == 1 ? low : high
+
+    labelText = tradeInstrument + "\n" + signalType + "\nStr:" + str.tostring(signalStrength)
+
+    label.new(bar_index, labelY, labelText,
+        color=color.new(labelColor, 20),
+        textcolor=color.white,
+        style=labelStyle,
+        size=size.small)
+
+// ============================================================================
+// INFO TABLE
+// ============================================================================
+
+var table infoTable = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "SVP+VWAP V2", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_color=color.white)
+
+    table.cell(infoTable, 0, 1, "POC", text_color=colPOC, text_size=size.small)
+    table.cell(infoTable, 1, 1, str.tostring(poc, "#.##"), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 2, "VAH", text_color=colVAH, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(vah, "#.##"), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 3, "VAL", text_color=colVAL, text_size=size.small)
+    table.cell(infoTable, 1, 3, str.tostring(val_, "#.##"), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 4, "VWAP", text_color=colVWAP, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(vwapLine, "#.##"), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 5, "POC Dir", text_color=color.white, text_size=size.small)
+    pocDirText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == -1 ? "↓ DOWN" : "→ FLAT"
+    pocDirColor = pocMigrateDir == 1 ? colBullish : pocMigrateDir == -1 ? colBearish : color.gray
+    table.cell(infoTable, 1, 5, pocDirText, text_color=pocDirColor, text_size=size.small)
+
+    table.cell(infoTable, 0, 6, "Signal", text_color=color.white, text_size=size.small)
+    sigText = signal == 1 ? "LONG" : signal == -1 ? "SHORT" : "NONE"
+    sigColor = signal == 1 ? colBullish : signal == -1 ? colBearish : color.gray
+    table.cell(infoTable, 1, 6, sigText, text_color=sigColor, text_size=size.small)
+
+    table.cell(infoTable, 0, 7, "Instrument", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7, tradeInstrument != "" ? tradeInstrument : "-", text_color=color.yellow, text_size=size.small)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Strong bullish alert
+alertcondition(signal == 1 and signalStrength >= 3,
+    title="Strong Bullish Signal",
+    message="SVP+VWAP: Strong BULLISH signal - {{ticker}} - Trade CALL - {{signalType}}")
+
+// Strong bearish alert
+alertcondition(signal == -1 and signalStrength >= 3,
+    title="Strong Bearish Signal",
+    message="SVP+VWAP: Strong BEARISH signal - {{ticker}} - Trade PUT - {{signalType}}")
+
+// LVN breakout alert
+alertcondition(lvnBreakUp or lvnBreakDown,
+    title="LVN Breakout",
+    message="SVP+VWAP: LVN BREAKOUT - {{ticker}} - Explosion trade potential!")
+
+// VAH/VAL breakout alert
+alertcondition(vahBreakout and pocMigrateUp,
+    title="VAH Breakout + POC Up",
+    message="SVP+VWAP: VAH BREAKOUT with POC migrating UP - {{ticker}} - Strong CALL setup!")
+
+alertcondition(valBreakout and pocMigrateDown,
+    title="VAL Breakout + POC Down",
+    message="SVP+VWAP: VAL BREAKOUT with POC migrating DOWN - {{ticker}} - Strong PUT setup!")
