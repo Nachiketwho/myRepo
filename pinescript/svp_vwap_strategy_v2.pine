@@ -48,9 +48,14 @@ tpRRRatio = input.float(2.0, "Take Profit R:R Ratio", minval=1.0, maxval=5.0, st
 
 // Trailing Stop
 grp_trail = "Trailing Stop"
-useTrailingSL = input.bool(true, "Use Trailing Stop", group=grp_trail)
-trailBreakevenMult = input.float(1.0, "Breakeven at X times risk", minval=0.5, maxval=2.0, step=0.1, group=grp_trail)
-trailLockMult = input.float(0.5, "Lock in at X times risk", minval=0.0, maxval=1.0, step=0.1, group=grp_trail)
+trailMode = input.string("Stepped", "Trailing Mode", options=["None", "Breakeven", "Stepped"], group=grp_trail)
+// Stepped milestones: at Nx risk profit, lock in X% of profit
+trail1ProfitMult = input.float(1.0, "Milestone 1: Profit (x risk)", minval=0.5, maxval=2.0, step=0.1, group=grp_trail, tooltip="Move SL when profit reaches this multiple of risk")
+trail1LockMult = input.float(0.0, "Milestone 1: Lock (x risk)", minval=0.0, maxval=1.0, step=0.1, group=grp_trail, tooltip="Lock in this multiple of risk as profit (0 = breakeven)")
+trail2ProfitMult = input.float(1.5, "Milestone 2: Profit (x risk)", minval=1.0, maxval=3.0, step=0.1, group=grp_trail)
+trail2LockMult = input.float(0.5, "Milestone 2: Lock (x risk)", minval=0.0, maxval=1.5, step=0.1, group=grp_trail)
+trail3ProfitMult = input.float(2.0, "Milestone 3: Profit (x risk)", minval=1.5, maxval=4.0, step=0.1, group=grp_trail)
+trail3LockMult = input.float(1.0, "Milestone 3: Lock (x risk)", minval=0.5, maxval=2.0, step=0.1, group=grp_trail)
 
 // Display Settings
 grp_display = "Display Settings"
@@ -344,27 +349,73 @@ if shortCondition and strategy.position_size == 0
     strategy.entry("Short", strategy.short, comment=signalType)
     strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
 
-// Trailing stop logic
-if useTrailingSL and strategy.position_size != 0
+// Trailing stop logic with stepped milestones
+var int activeMilestone = -1
+var float trailingStopLevel = na
+
+// Reset milestone tracking on new position
+if strategy.position_size == 0
+    activeMilestone := -1
+    trailingStopLevel := na
+
+if trailMode != "None" and strategy.position_size != 0
+    entryPrice = strategy.position_avg_price
+
     if strategy.position_size > 0
         // Long position trailing
-        entryPrice = strategy.position_avg_price
-        currentProfit = close - entryPrice
-        breakevenLevel = slPoints * trailBreakevenMult
+        currentProfit = high - entryPrice  // Use high for milestone check
 
-        if currentProfit >= breakevenLevel
-            newSL = entryPrice + (slPoints * trailLockMult)
-            strategy.exit("Long Exit", "Long", stop=newSL, limit=longTP)
+        // Check milestones in order (highest first for stepped)
+        if trailMode == "Stepped"
+            // Milestone 3
+            if currentProfit >= slPoints * trail3ProfitMult and activeMilestone < 3
+                trailingStopLevel := entryPrice + slPoints * trail3LockMult
+                activeMilestone := 3
+            // Milestone 2
+            else if currentProfit >= slPoints * trail2ProfitMult and activeMilestone < 2
+                trailingStopLevel := entryPrice + slPoints * trail2LockMult
+                activeMilestone := 2
+            // Milestone 1
+            else if currentProfit >= slPoints * trail1ProfitMult and activeMilestone < 1
+                trailingStopLevel := entryPrice + slPoints * trail1LockMult
+                activeMilestone := 1
+        else if trailMode == "Breakeven"
+            // Simple breakeven at milestone 1
+            if currentProfit >= slPoints * trail1ProfitMult and activeMilestone < 1
+                trailingStopLevel := entryPrice + slPoints * trail1LockMult
+                activeMilestone := 1
+
+        // Update exit with trailing stop
+        if not na(trailingStopLevel)
+            strategy.exit("Long Exit", "Long", stop=trailingStopLevel, limit=longTP)
 
     else if strategy.position_size < 0
         // Short position trailing
-        entryPrice = strategy.position_avg_price
-        currentProfit = entryPrice - close
-        breakevenLevel = slPoints * trailBreakevenMult
+        currentProfit = entryPrice - low  // Use low for milestone check
 
-        if currentProfit >= breakevenLevel
-            newSL = entryPrice - (slPoints * trailLockMult)
-            strategy.exit("Short Exit", "Short", stop=newSL, limit=shortTP)
+        // Check milestones in order (highest first for stepped)
+        if trailMode == "Stepped"
+            // Milestone 3
+            if currentProfit >= slPoints * trail3ProfitMult and activeMilestone < 3
+                trailingStopLevel := entryPrice - slPoints * trail3LockMult
+                activeMilestone := 3
+            // Milestone 2
+            else if currentProfit >= slPoints * trail2ProfitMult and activeMilestone < 2
+                trailingStopLevel := entryPrice - slPoints * trail2LockMult
+                activeMilestone := 2
+            // Milestone 1
+            else if currentProfit >= slPoints * trail1ProfitMult and activeMilestone < 1
+                trailingStopLevel := entryPrice - slPoints * trail1LockMult
+                activeMilestone := 1
+        else if trailMode == "Breakeven"
+            // Simple breakeven at milestone 1
+            if currentProfit >= slPoints * trail1ProfitMult and activeMilestone < 1
+                trailingStopLevel := entryPrice - slPoints * trail1LockMult
+                activeMilestone := 1
+
+        // Update exit with trailing stop
+        if not na(trailingStopLevel)
+            strategy.exit("Short Exit", "Short", stop=trailingStopLevel, limit=shortTP)
 
 // ============================================================================
 // PLOTTING
@@ -394,6 +445,10 @@ plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == -1,
     title="LVN Expansion Success Down", location=location.belowbar,
     style=shape.flag, size=size.small, color=colBearish, text="EXP✓")
 
+// Trailing Stop Level
+plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na,
+    "Trailing SL", color.new(color.yellow, 0), 2, plot.style_linebr, title="Trailing Stop")
+
 // Signal markers
 plotshape(showSignals and signal == 1 and signalStrength >= 3,
     title="Strong Long", location=location.belowbar,
@@ -407,11 +462,11 @@ plotshape(showSignals and signal == -1 and signalStrength >= 3,
 // INFO TABLE
 // ============================================================================
 
-var table infoTable = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80))
+var table infoTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80))
 
 if barstate.islast
     table.cell(infoTable, 0, 0, "SVP+VWAP V2", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 0, "w/ LVN Expansion", text_color=color.yellow, text_size=size.small)
+    table.cell(infoTable, 1, 0, "w/ Trail SL", text_color=color.yellow, text_size=size.small)
 
     table.cell(infoTable, 0, 1, "POC", text_color=colPOC, text_size=size.small)
     table.cell(infoTable, 1, 1, str.tostring(poc, "#.##"), text_color=color.white, text_size=size.small)
@@ -429,18 +484,27 @@ if barstate.islast
     pocText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == -1 ? "↓ DOWN" : "→ FLAT"
     table.cell(infoTable, 1, 5, pocText, text_color=pocMigrateDir == 1 ? colBullish : pocMigrateDir == -1 ? colBearish : color.gray, text_size=size.small)
 
-    table.cell(infoTable, 0, 6, "LVN Zone", text_color=colLVN, text_size=size.small)
-    table.cell(infoTable, 1, 6, isLVN ? "ACTIVE" : "-", text_color=isLVN ? colLVN : color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 6, "Signal", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 6, signalType != "" ? signalType : "-", text_color=signal == 1 ? colBullish : signal == -1 ? colBearish : color.gray, text_size=size.small)
 
-    table.cell(infoTable, 0, 7, "LVN Exp", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 0, 7, "Trade", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7, tradeInstrument != "" ? tradeInstrument : "-", text_color=color.yellow, text_size=size.small)
+
+    // Trailing SL info
+    table.cell(infoTable, 0, 8, "Trail Mode", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 8, trailMode, text_color=color.yellow, text_size=size.small)
+
+    table.cell(infoTable, 0, 9, "Trail SL", text_color=color.white, text_size=size.small)
+    trailSLText = not na(trailingStopLevel) ? str.tostring(trailingStopLevel, "#.##") : "-"
+    table.cell(infoTable, 1, 9, trailSLText, text_color=not na(trailingStopLevel) ? color.yellow : color.gray, text_size=size.small)
+
+    table.cell(infoTable, 0, 10, "Milestone", text_color=color.white, text_size=size.small)
+    milestoneText = activeMilestone >= 1 ? str.tostring(activeMilestone) + "/3" : "-"
+    table.cell(infoTable, 1, 10, milestoneText, text_color=activeMilestone >= 1 ? color.lime : color.gray, text_size=size.small)
+
+    table.cell(infoTable, 0, 11, "LVN Exp", text_color=colLVN, text_size=size.small)
     lvnExpText = inLVNExpansion ? (lvnDirection == 1 ? "LONG" : "SHORT") : "-"
-    table.cell(infoTable, 1, 7, lvnExpText, text_color=inLVNExpansion ? color.yellow : color.gray, text_size=size.small)
-
-    table.cell(infoTable, 0, 8, "Signal", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 8, signalType != "" ? signalType : "-", text_color=signal == 1 ? colBullish : signal == -1 ? colBearish : color.gray, text_size=size.small)
-
-    table.cell(infoTable, 0, 9, "Trade", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 9, tradeInstrument != "" ? tradeInstrument : "-", text_color=color.yellow, text_size=size.small)
+    table.cell(infoTable, 1, 11, lvnExpText, text_color=inLVNExpansion ? color.yellow : color.gray, text_size=size.small)
 
 // ============================================================================
 // ALERTS
