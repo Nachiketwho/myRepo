@@ -186,7 +186,7 @@ pocDir = pocMigrateDir
 
 // Bullish V1 signals
 valBounce = low <= val_ and close > val_ and pocDir >= 0  // Trend filter: POC flat or rising
-vwapBounce = low <= vwapLowerInner and close > vwapLowerInner
+vwapBounce = low <= vwapLowerInner and close > vwapLowerInner and pocDir >= 0  // Trend filter
 pocBreakUp = barsAbovePOC >= pocBreakBars and prevClose <= prevPOCVal
 
 // Bearish V1 signals

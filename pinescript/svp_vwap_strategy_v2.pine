@@ -243,7 +243,7 @@ pocMigrateDown = pocMigrateDir == -1
 pocDir = pocMigrateDir
 
 valBounce = low <= val_ and close > val_ and pocDir >= 0
-vwapBounce = low <= vwapLowerInner and close > vwapLowerInner
+vwapBounce = low <= vwapLowerInner and close > vwapLowerInner and pocDir >= 0  // Trend filter
 pocBreakUp = barsAbovePOC >= pocBreakBars and prevClose <= prevPOCVal
 
 vahReject = high >= vah and close < vah and pocDir <= 0
