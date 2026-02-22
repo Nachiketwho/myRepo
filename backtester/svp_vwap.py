@@ -585,9 +585,17 @@ class SVPVWAPSignals:
                     strength = 2
                 else:
                     # V1 signals
-                    vah_reject = (high >= row["vah"]) and (close < row["vah"])
-                    vwap_reject = (high >= row["vwap_upper_inner"]) and (
-                        close < row["vwap_upper_inner"]
+                    # vah_reject: Only trigger when POC is flat or falling (trend filter)
+                    # Avoids shorting into strong uptrends where POC is migrating up
+                    poc_dir = row.get("poc_migrate_dir", 0)
+                    vah_reject = (
+                        (high >= row["vah"]) and (close < row["vah"])
+                        and poc_dir <= 0  # POC flat or migrating down
+                    )
+                    vwap_reject = (
+                        (high >= row["vwap_upper_inner"])
+                        and (close < row["vwap_upper_inner"])
+                        and poc_dir <= 0  # POC flat or migrating down
                     )
                     poc_break_down = (
                         row["bars_below_poc"] >= self.poc_break_bars
