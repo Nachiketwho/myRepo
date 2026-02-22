@@ -526,15 +526,18 @@ class SVPVWAPSignals:
 
             # V1 signals (lower priority if no V2 signal)
             if sig == 0:
-                # val_bounce: Only trigger when POC is flat or rising (trend filter)
+                # Trend filter: only take bullish V1 signals when POC is flat or rising
                 # Avoids catching falling knives when POC is migrating down
                 poc_dir = row.get("poc_migrate_dir", 0)
+
                 val_bounce = (
                     (low <= row["val"]) and (close > row["val"])
                     and poc_dir >= 0  # POC flat or migrating up
                 )
-                vwap_bounce = (low <= row["vwap_lower_inner"]) and (
-                    close > row["vwap_lower_inner"]
+                vwap_bounce = (
+                    (low <= row["vwap_lower_inner"])
+                    and (close > row["vwap_lower_inner"])
+                    and poc_dir >= 0  # POC flat or migrating up (trend filter)
                 )
                 poc_break_up = (
                     row["bars_above_poc"] >= self.poc_break_bars
