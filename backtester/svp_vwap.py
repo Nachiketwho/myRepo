@@ -45,12 +45,26 @@ from backtester.ema_crossover import (
 
 class SVPSignalType(Enum):
     """Signal types from SVP+VWAP strategy."""
+    # Basic signals (V1)
     VAL_BOUNCE = "val_bounce"         # Price bounces off Value Area Low
     VAH_REJECT = "vah_reject"         # Price rejects from Value Area High
     POC_BREAK_UP = "poc_break_up"     # Bullish breakout above POC
     POC_BREAK_DOWN = "poc_break_down" # Bearish breakdown below POC
     VWAP_BOUNCE = "vwap_bounce"       # Bounce off VWAP lower band
     VWAP_REJECT = "vwap_reject"       # Rejection at VWAP upper band
+    # Advanced signals (V2)
+    VAH_ACCEPTANCE = "vah_acceptance" # Sustained trading above VAH (bullish)
+    VAL_ACCEPTANCE = "val_acceptance" # Sustained trading below VAL (bearish)
+    POC_MIGRATE_UP = "poc_migrate_up" # POC shifting upward (bullish)
+    POC_MIGRATE_DN = "poc_migrate_dn" # POC shifting downward (bearish)
+    LVN_BREAKOUT = "lvn_breakout"     # Low Volume Node breakout (explosion)
+
+
+class TradeInstrument(Enum):
+    """Recommended trade instrument based on signal."""
+    CALL = "call"     # Buy call options
+    PUT = "put"       # Buy put options
+    FUTURES = "futures"  # Trade futures (neutral)
 
 
 # Value area covers 70% of session volume (standard TPO/VP definition)
@@ -58,6 +72,9 @@ VALUE_AREA_PCT = 0.70
 
 # Number of price bins for volume profile
 DEFAULT_NUM_BINS = 50
+
+# LVN threshold: bins with volume below this fraction of avg are LVNs
+LVN_THRESHOLD = 0.3
 
 # Default config
 SVP_DEFAULT_CONFIG = {
@@ -80,6 +97,12 @@ SVP_DEFAULT_CONFIG = {
     "vwap_band_outer": 2.0,
     "volume_confirm_mult": 1.2,  # volume must be 1.2x avg for confirmation
     "poc_break_bars": 3,  # bars above/below POC to confirm breakout
+    # Advanced V2 features
+    "acceptance_bars": 3,  # bars above VAH or below VAL for acceptance
+    "poc_migrate_sessions": 3,  # sessions to track POC migration
+    "poc_migrate_threshold": 0.002,  # min % POC shift to trigger migration signal
+    "lvn_threshold": LVN_THRESHOLD,  # bins below this fraction of avg = LVN
+    "lvn_volume_surge": 1.5,  # volume surge multiplier for LVN breakout
 }
 
 
@@ -96,6 +119,9 @@ class VolumeProfileLevel:
     total_volume: float = 0.0
     bin_edges: np.ndarray = field(default_factory=lambda: np.array([]))
     bin_volumes: np.ndarray = field(default_factory=lambda: np.array([]))
+    # LVN (Low Volume Node) data
+    lvn_zones: list = field(default_factory=list)  # List of (low, high) price zones
+    hvn_zones: list = field(default_factory=list)  # High Volume Nodes for reference
 
 
 def compute_volume_profile(
@@ -184,10 +210,26 @@ def compute_volume_profile(
     val = float(bin_edges[va_low_idx])
     vah = float(bin_edges[va_high_idx + 1])
 
+    # Detect LVN and HVN zones
+    avg_vol = float(np.mean(bin_volumes[bin_volumes > 0])) if np.any(bin_volumes > 0) else 0
+    lvn_zones = []
+    hvn_zones = []
+    lvn_threshold = 0.3  # bins with < 30% avg volume
+
+    for b in range(num_bins):
+        bin_lo = float(bin_edges[b])
+        bin_hi = float(bin_edges[b + 1])
+        if avg_vol > 0:
+            if bin_volumes[b] < avg_vol * lvn_threshold:
+                lvn_zones.append((bin_lo, bin_hi))
+            elif bin_volumes[b] > avg_vol * 1.5:
+                hvn_zones.append((bin_lo, bin_hi))
+
     return VolumeProfileLevel(
         poc=poc, vah=vah, val=val,
         total_volume=total_volume,
         bin_edges=bin_edges, bin_volumes=bin_volumes,
+        lvn_zones=lvn_zones, hvn_zones=hvn_zones,
     )
 
 
@@ -197,7 +239,14 @@ def compute_volume_profile(
 
 @dataclass
 class SVPVWAPSignals:
-    """Generate signals from Session Volume Profile + VWAP."""
+    """Generate signals from Session Volume Profile + VWAP.
+
+    V2 additions:
+    - POC migration tracking (bullish: POC shifting up; bearish: POC down)
+    - VAH/VAL acceptance (sustained trading above/below)
+    - LVN breakout detection (explosion trades with volume surge)
+    - Trade instrument recommendation (calls/puts/futures)
+    """
 
     session_lookback: int = 75
     num_bins: int = DEFAULT_NUM_BINS
@@ -206,6 +255,12 @@ class SVPVWAPSignals:
     vwap_band_outer: float = 2.0
     volume_confirm_mult: float = 1.2
     poc_break_bars: int = 3
+    # V2 advanced features
+    acceptance_bars: int = 3
+    poc_migrate_sessions: int = 3
+    poc_migrate_threshold: float = 0.002
+    lvn_threshold: float = 0.3
+    lvn_volume_surge: float = 1.5
 
     def _compute_rolling_vwap(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute VWAP and bands with session reset."""
@@ -233,11 +288,15 @@ class SVPVWAPSignals:
         return result
 
     def _compute_session_profiles(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Compute rolling session volume profile levels."""
+        """Compute rolling session volume profile levels with LVN detection."""
         n = len(df)
         poc = np.full(n, np.nan)
         vah = np.full(n, np.nan)
         val = np.full(n, np.nan)
+        # Store LVN zones per bar (as string for DataFrame compatibility)
+        lvn_zones_list = [None] * n
+        # Store profiles for POC migration tracking
+        profiles = [None] * n
 
         highs = df["high"].values
         lows = df["low"].values
@@ -257,21 +316,78 @@ class SVPVWAPSignals:
             poc[i] = profile.poc
             vah[i] = profile.vah
             val[i] = profile.val
+            lvn_zones_list[i] = profile.lvn_zones
+            profiles[i] = profile
 
         result = pd.DataFrame(index=df.index)
         result["poc"] = poc
         result["vah"] = vah
         result["val"] = val
+
+        # POC migration: track shift over multiple sessions
+        poc_shift = np.zeros(n)
+        poc_migrate_dir = np.zeros(n)  # 1 = up, -1 = down, 0 = flat
+        session_step = max(1, self.session_lookback // 2)
+
+        for i in range(self.session_lookback * self.poc_migrate_sessions, n):
+            # Compare current POC with POC from previous sessions
+            prev_idx = i - session_step * (self.poc_migrate_sessions - 1)
+            if prev_idx >= self.session_lookback and not np.isnan(poc[prev_idx]):
+                pct_shift = (poc[i] - poc[prev_idx]) / poc[prev_idx]
+                poc_shift[i] = pct_shift
+                if pct_shift > self.poc_migrate_threshold:
+                    poc_migrate_dir[i] = 1  # POC migrating up
+                elif pct_shift < -self.poc_migrate_threshold:
+                    poc_migrate_dir[i] = -1  # POC migrating down
+
+        result["poc_shift"] = poc_shift
+        result["poc_migrate_dir"] = poc_migrate_dir.astype(int)
+
+        # Store LVN data for breakout detection
+        result["_lvn_zones"] = lvn_zones_list
+        result["_profiles"] = profiles
+
         return result
 
+    def _check_lvn_breakout(
+        self, close: float, prev_close: float, lvn_zones: list, vol_surge: bool,
+    ) -> tuple[bool, bool]:
+        """Check if price broke through an LVN zone with volume surge.
+
+        Returns: (lvn_break_up, lvn_break_down)
+        """
+        if not lvn_zones or not vol_surge:
+            return False, False
+
+        lvn_break_up = False
+        lvn_break_down = False
+
+        for lvn_lo, lvn_hi in lvn_zones:
+            # Breakout up through LVN
+            if prev_close < lvn_lo and close > lvn_hi:
+                lvn_break_up = True
+            # Breakdown through LVN
+            elif prev_close > lvn_hi and close < lvn_lo:
+                lvn_break_down = True
+
+        return lvn_break_up, lvn_break_down
+
     def generate(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Generate SVP+VWAP signals.
+        """Generate SVP+VWAP signals with V2 advanced features.
 
         Returns DataFrame with:
-        - vwap, vwap bands, poc, vah, val
+        - vwap, vwap bands, poc, vah, val, poc_shift, poc_migrate_dir
         - signal: 1 (long), -1 (short), 0 (no signal)
         - signal_type: SVPSignalType value
         - signal_strength: 1-4 (higher = more confluent)
+        - trade_instrument: call/put/futures recommendation
+
+        V2 Signal Types:
+        - vah_acceptance: Sustained trading above VAH → LONG (trade calls)
+        - val_acceptance: Sustained trading below VAL → SHORT (trade puts)
+        - poc_migrate_up: POC shifting higher → LONG (trade calls)
+        - poc_migrate_dn: POC shifting lower → SHORT (trade puts)
+        - lvn_breakout: Price breaks through LVN with volume → explosion trade
         """
         result = df.copy()
 
@@ -280,7 +396,7 @@ class SVPVWAPSignals:
         for col in vwap_data.columns:
             result[col] = vwap_data[col]
 
-        # Session volume profile
+        # Session volume profile (includes POC migration and LVN)
         svp_data = self._compute_session_profiles(df)
         for col in svp_data.columns:
             result[col] = svp_data[col]
@@ -291,6 +407,10 @@ class SVPVWAPSignals:
         ).mean()
         result["vol_confirm"] = df["volume"] > (
             result["vol_avg"] * self.volume_confirm_mult
+        )
+        # Volume surge for LVN breakouts (higher threshold)
+        result["vol_surge"] = df["volume"] > (
+            result["vol_avg"] * self.lvn_volume_surge
         )
 
         # Price relative to POC (bars above/below)
@@ -303,12 +423,24 @@ class SVPVWAPSignals:
             self.poc_break_bars, min_periods=1
         ).sum()
 
-        # Generate signals
-        signal = np.zeros(len(df))
-        signal_type = [""] * len(df)
-        signal_strength = np.zeros(len(df))
+        # VAH/VAL acceptance: sustained bars above/below
+        above_vah = (df["close"] > result["vah"]).astype(int)
+        result["bars_above_vah"] = above_vah.rolling(
+            self.acceptance_bars, min_periods=1
+        ).sum()
+        below_val = (df["close"] < result["val"]).astype(int)
+        result["bars_below_val"] = below_val.rolling(
+            self.acceptance_bars, min_periods=1
+        ).sum()
 
-        for i in range(self.session_lookback + 1, len(df)):
+        # Generate signals
+        n = len(df)
+        signal = np.zeros(n)
+        signal_type = [""] * n
+        signal_strength = np.zeros(n)
+        trade_instrument = [""] * n
+
+        for i in range(self.session_lookback + 1, n):
             row = result.iloc[i]
             prev = result.iloc[i - 1]
 
@@ -320,75 +452,151 @@ class SVPVWAPSignals:
             high = row["high"]
             prev_close = prev["close"]
             vol_ok = row["vol_confirm"]
+            vol_surge = row["vol_surge"]
 
             strength = 0
             sig = 0
             sig_type = ""
+            instrument = ""
 
-            # --- LONG SIGNALS ---
+            # Get LVN zones for this bar
+            lvn_zones = row.get("_lvn_zones", None) or []
 
-            # 1. VAL bounce: price touches VAL and closes above
-            val_bounce = (low <= row["val"]) and (close > row["val"])
-            # 2. VWAP lower band bounce
-            vwap_bounce = (low <= row["vwap_lower_inner"]) and (
-                close > row["vwap_lower_inner"]
+            # --- ADVANCED SIGNALS (V2) - higher priority ---
+
+            # 1. VAH Acceptance: sustained trading above VAH (bullish)
+            vah_acceptance = row["bars_above_vah"] >= self.acceptance_bars
+
+            # 2. VAL Acceptance: sustained trading below VAL (bearish)
+            val_acceptance = row["bars_below_val"] >= self.acceptance_bars
+
+            # 3. POC Migration Up/Down
+            poc_migrate_up = row["poc_migrate_dir"] == 1
+            poc_migrate_dn = row["poc_migrate_dir"] == -1
+
+            # 4. LVN Breakout (explosion trade)
+            lvn_break_up, lvn_break_down = self._check_lvn_breakout(
+                close, prev_close, lvn_zones, vol_surge,
             )
-            # 3. POC breakout: sustained move above POC
-            poc_break_up = (
-                row["bars_above_poc"] >= self.poc_break_bars
-                and prev_close <= prev["poc"]
-            ) if not pd.isna(prev["poc"]) else False
 
-            if val_bounce or vwap_bounce or poc_break_up:
+            # --- BULLISH SIGNALS ---
+
+            # V2: VAH acceptance with POC migrating up → strong bullish
+            if vah_acceptance and poc_migrate_up:
                 sig = 1
-                if val_bounce:
-                    sig_type = SVPSignalType.VAL_BOUNCE.value
-                    strength += 1
-                if vwap_bounce:
-                    sig_type = sig_type or SVPSignalType.VWAP_BOUNCE.value
-                    strength += 1
-                if poc_break_up:
-                    sig_type = sig_type or SVPSignalType.POC_BREAK_UP.value
-                    strength += 1
-                # Volume confirmation adds strength
-                if vol_ok:
-                    strength += 1
+                sig_type = SVPSignalType.VAH_ACCEPTANCE.value
+                instrument = TradeInstrument.CALL.value
+                strength = 4  # Maximum strength
+            # V2: LVN breakout up → explosion trade
+            elif lvn_break_up:
+                sig = 1
+                sig_type = SVPSignalType.LVN_BREAKOUT.value
+                instrument = TradeInstrument.CALL.value
+                strength = 4
+            # V2: VAH acceptance only
+            elif vah_acceptance and close > row["vah"]:
+                sig = 1
+                sig_type = SVPSignalType.VAH_ACCEPTANCE.value
+                instrument = TradeInstrument.CALL.value
+                strength = 3
+            # V2: POC migrating up
+            elif poc_migrate_up and vol_ok:
+                sig = 1
+                sig_type = SVPSignalType.POC_MIGRATE_UP.value
+                instrument = TradeInstrument.CALL.value
+                strength = 2
 
-            # --- SHORT SIGNALS ---
+            # V1 signals (lower priority if no V2 signal)
+            if sig == 0:
+                val_bounce = (low <= row["val"]) and (close > row["val"])
+                vwap_bounce = (low <= row["vwap_lower_inner"]) and (
+                    close > row["vwap_lower_inner"]
+                )
+                poc_break_up = (
+                    row["bars_above_poc"] >= self.poc_break_bars
+                    and prev_close <= prev["poc"]
+                ) if not pd.isna(prev["poc"]) else False
 
-            # 1. VAH reject: price touches VAH and closes below
-            vah_reject = (high >= row["vah"]) and (close < row["vah"])
-            # 2. VWAP upper band reject
-            vwap_reject = (high >= row["vwap_upper_inner"]) and (
-                close < row["vwap_upper_inner"]
-            )
-            # 3. POC breakdown: sustained move below POC
-            poc_break_down = (
-                row["bars_below_poc"] >= self.poc_break_bars
-                and prev_close >= prev["poc"]
-            ) if not pd.isna(prev["poc"]) else False
+                if val_bounce or vwap_bounce or poc_break_up:
+                    sig = 1
+                    instrument = TradeInstrument.CALL.value
+                    if val_bounce:
+                        sig_type = SVPSignalType.VAL_BOUNCE.value
+                        strength += 1
+                    if vwap_bounce:
+                        sig_type = sig_type or SVPSignalType.VWAP_BOUNCE.value
+                        strength += 1
+                    if poc_break_up:
+                        sig_type = sig_type or SVPSignalType.POC_BREAK_UP.value
+                        strength += 1
+                    if vol_ok:
+                        strength += 1
 
-            if sig == 0 and (vah_reject or vwap_reject or poc_break_down):
-                sig = -1
-                if vah_reject:
-                    sig_type = SVPSignalType.VAH_REJECT.value
-                    strength += 1
-                if vwap_reject:
-                    sig_type = sig_type or SVPSignalType.VWAP_REJECT.value
-                    strength += 1
-                if poc_break_down:
-                    sig_type = sig_type or SVPSignalType.POC_BREAK_DOWN.value
-                    strength += 1
-                if vol_ok:
-                    strength += 1
+            # --- BEARISH SIGNALS ---
+
+            if sig == 0:
+                # V2: VAL acceptance with POC migrating down → strong bearish
+                if val_acceptance and poc_migrate_dn:
+                    sig = -1
+                    sig_type = SVPSignalType.VAL_ACCEPTANCE.value
+                    instrument = TradeInstrument.PUT.value
+                    strength = 4
+                # V2: LVN breakdown → explosion trade
+                elif lvn_break_down:
+                    sig = -1
+                    sig_type = SVPSignalType.LVN_BREAKOUT.value
+                    instrument = TradeInstrument.PUT.value
+                    strength = 4
+                # V2: VAL acceptance only
+                elif val_acceptance and close < row["val"]:
+                    sig = -1
+                    sig_type = SVPSignalType.VAL_ACCEPTANCE.value
+                    instrument = TradeInstrument.PUT.value
+                    strength = 3
+                # V2: POC migrating down
+                elif poc_migrate_dn and vol_ok:
+                    sig = -1
+                    sig_type = SVPSignalType.POC_MIGRATE_DN.value
+                    instrument = TradeInstrument.PUT.value
+                    strength = 2
+                else:
+                    # V1 signals
+                    vah_reject = (high >= row["vah"]) and (close < row["vah"])
+                    vwap_reject = (high >= row["vwap_upper_inner"]) and (
+                        close < row["vwap_upper_inner"]
+                    )
+                    poc_break_down = (
+                        row["bars_below_poc"] >= self.poc_break_bars
+                        and prev_close >= prev["poc"]
+                    ) if not pd.isna(prev["poc"]) else False
+
+                    if vah_reject or vwap_reject or poc_break_down:
+                        sig = -1
+                        instrument = TradeInstrument.PUT.value
+                        if vah_reject:
+                            sig_type = SVPSignalType.VAH_REJECT.value
+                            strength += 1
+                        if vwap_reject:
+                            sig_type = sig_type or SVPSignalType.VWAP_REJECT.value
+                            strength += 1
+                        if poc_break_down:
+                            sig_type = sig_type or SVPSignalType.POC_BREAK_DOWN.value
+                            strength += 1
+                        if vol_ok:
+                            strength += 1
 
             signal[i] = sig
             signal_type[i] = sig_type
             signal_strength[i] = min(strength, 4)
+            trade_instrument[i] = instrument
 
         result["signal"] = signal.astype(int)
         result["signal_type"] = signal_type
         result["signal_strength"] = signal_strength.astype(int)
+        result["trade_instrument"] = trade_instrument
+
+        # Clean up internal columns
+        result.drop(columns=["_lvn_zones", "_profiles"], inplace=True, errors="ignore")
 
         return result
 
@@ -406,12 +614,14 @@ class SVPVWAPTrade:
     direction: int  # 1 = long, -1 = short
     signal_type: str
     signal_strength: int
+    trade_instrument: str = ""  # call, put, or futures
 
     # SVP levels at entry
     poc_at_entry: float = 0.0
     vah_at_entry: float = 0.0
     val_at_entry: float = 0.0
     vwap_at_entry: float = 0.0
+    poc_migrate_dir: int = 0  # 1=up, -1=down, 0=flat
 
     # Risk management
     sl_level: float = 0.0
@@ -648,6 +858,12 @@ class SVPVWAPEngine:
             vwap_band_outer=self.config["vwap_band_outer"],
             volume_confirm_mult=self.config["volume_confirm_mult"],
             poc_break_bars=self.config["poc_break_bars"],
+            # V2 advanced features
+            acceptance_bars=self.config["acceptance_bars"],
+            poc_migrate_sessions=self.config["poc_migrate_sessions"],
+            poc_migrate_threshold=self.config["poc_migrate_threshold"],
+            lvn_threshold=self.config["lvn_threshold"],
+            lvn_volume_surge=self.config["lvn_volume_surge"],
         )
         self.sl_calc = SLCalculator(
             strategy=sl_strategy,
@@ -829,10 +1045,12 @@ class SVPVWAPEngine:
                     direction=signal,
                     signal_type=row.get("signal_type", ""),
                     signal_strength=int(row.get("signal_strength", 0)),
+                    trade_instrument=row.get("trade_instrument", ""),
                     poc_at_entry=row.get("poc", 0.0) if not pd.isna(row.get("poc", np.nan)) else 0.0,
                     vah_at_entry=row.get("vah", 0.0) if not pd.isna(row.get("vah", np.nan)) else 0.0,
                     val_at_entry=row.get("val", 0.0) if not pd.isna(row.get("val", np.nan)) else 0.0,
                     vwap_at_entry=row.get("vwap", 0.0) if not pd.isna(row.get("vwap", np.nan)) else 0.0,
+                    poc_migrate_dir=int(row.get("poc_migrate_dir", 0)),
                     sl_level=sl_info["sl_level"],
                     sl_points=sl_info["sl_points"],
                     sl_strategy=sl_info["sl_strategy"],
@@ -928,12 +1146,14 @@ def build_svp_trade_log(result: SVPVWAPResult) -> pd.DataFrame:
             "direction": "LONG" if t.direction == 1 else "SHORT",
             "signal_type": t.signal_type,
             "signal_strength": t.signal_strength,
+            "trade_instrument": t.trade_instrument,  # call/put/futures
             "entry_price": round(t.entry_price, 2),
             "exit_price": round(t.exit_price, 2),
             "poc_at_entry": round(t.poc_at_entry, 2),
             "vah_at_entry": round(t.vah_at_entry, 2),
             "val_at_entry": round(t.val_at_entry, 2),
             "vwap_at_entry": round(t.vwap_at_entry, 2),
+            "poc_migrate_dir": t.poc_migrate_dir,  # 1=up, -1=down, 0=flat
             "sl_level": round(t.sl_level, 2),
             "tp_level": round(t.tp_level, 2),
             "sl_points": round(t.sl_points, 1),

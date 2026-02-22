@@ -27,10 +27,10 @@ from backtester.fno_optimizer import (
 )
 from backtester.svp_vwap import (
     SVPVWAPEngine, SVPVWAPResult, SVPVWAPTrade,
-    SVPVWAPSignals, SVPSignalType,
+    SVPVWAPSignals, SVPSignalType, TradeInstrument,
     VolumeProfileLevel, compute_volume_profile,
     run_svp_vwap_grid, build_svp_trade_log,
-    VALUE_AREA_PCT, DEFAULT_NUM_BINS, SVP_DEFAULT_CONFIG,
+    VALUE_AREA_PCT, DEFAULT_NUM_BINS, LVN_THRESHOLD, SVP_DEFAULT_CONFIG,
 )
 from backtester.ema_crossover import (
     EMACrossoverEngine, EMACrossoverResult, EMACrossoverTrade,
@@ -128,11 +128,13 @@ __all__ = [
     "SVPVWAPTrade",
     "SVPVWAPSignals",
     "SVPSignalType",
+    "TradeInstrument",
     "VolumeProfileLevel",
     "compute_volume_profile",
     "run_svp_vwap_grid",
     "build_svp_trade_log",
     "VALUE_AREA_PCT",
     "DEFAULT_NUM_BINS",
+    "LVN_THRESHOLD",
     "SVP_DEFAULT_CONFIG",
 ]
