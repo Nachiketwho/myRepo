@@ -352,9 +352,14 @@ class SVPVWAPSignals:
     def _check_lvn_breakout(
         self, close: float, prev_close: float, lvn_zones: list, vol_surge: bool,
     ) -> tuple[bool, bool]:
-        """Check if price broke through an LVN zone with volume surge.
+        """Check if price is entering/breaking through an LVN zone with volume surge.
 
         Returns: (lvn_break_up, lvn_break_down)
+
+        Fixed logic: Instead of requiring price to cross the ENTIRE LVN zone in
+        one bar (too aggressive, rarely happens), we now detect when price ENTERS
+        an LVN zone from below (bullish) or above (bearish) with volume surge.
+        The expansion/momentum happens as price moves through the low-volume area.
         """
         if not lvn_zones or not vol_surge:
             return False, False
@@ -363,11 +368,13 @@ class SVPVWAPSignals:
         lvn_break_down = False
 
         for lvn_lo, lvn_hi in lvn_zones:
-            # Breakout up through LVN
-            if prev_close < lvn_lo and close > lvn_hi:
+            # Bullish: price enters LVN from below (breaking into low volume area)
+            # prev_close was below LVN, now close is inside or above LVN
+            if prev_close < lvn_lo and close >= lvn_lo:
                 lvn_break_up = True
-            # Breakdown through LVN
-            elif prev_close > lvn_hi and close < lvn_lo:
+            # Bearish: price enters LVN from above (breaking into low volume area)
+            # prev_close was above LVN, now close is inside or below LVN
+            elif prev_close > lvn_hi and close <= lvn_hi:
                 lvn_break_down = True
 
         return lvn_break_up, lvn_break_down
@@ -464,10 +471,21 @@ class SVPVWAPSignals:
 
             # --- ADVANCED SIGNALS (V2) - higher priority ---
 
-            # 1. VAH Acceptance: sustained trading above VAH (bullish)
+            # 1. VAH Acceptance: BREAKOUT above VAH (enter on first bar breaking above)
+            # Old logic waited 3 bars which was too late (chasing exhausted moves)
+            # New logic: enter on breakout bar, use POC migration for strength
+            vah_breakout = (
+                prev_close <= prev.get("vah", float("inf"))
+                and close > row["vah"]
+            )
+            # Still track acceptance for confirmation (but not for entry timing)
             vah_acceptance = row["bars_above_vah"] >= self.acceptance_bars
 
-            # 2. VAL Acceptance: sustained trading below VAL (bearish)
+            # 2. VAL Acceptance: BREAKOUT below VAL (enter on first bar breaking below)
+            val_breakout = (
+                prev_close >= prev.get("val", 0)
+                and close < row["val"]
+            )
             val_acceptance = row["bars_below_val"] >= self.acceptance_bars
 
             # 3. POC Migration Up/Down
@@ -481,8 +499,8 @@ class SVPVWAPSignals:
 
             # --- BULLISH SIGNALS ---
 
-            # V2: VAH acceptance with POC migrating up → strong bullish
-            if vah_acceptance and poc_migrate_up:
+            # V2: VAH breakout with POC migrating up → strong bullish (best signal)
+            if vah_breakout and poc_migrate_up:
                 sig = 1
                 sig_type = SVPSignalType.VAH_ACCEPTANCE.value
                 instrument = TradeInstrument.CALL.value
@@ -493,8 +511,8 @@ class SVPVWAPSignals:
                 sig_type = SVPSignalType.LVN_BREAKOUT.value
                 instrument = TradeInstrument.CALL.value
                 strength = 4
-            # V2: VAH acceptance only
-            elif vah_acceptance and close > row["vah"]:
+            # V2: VAH breakout (enter on first bar breaking above VAH)
+            elif vah_breakout and vol_ok:
                 sig = 1
                 sig_type = SVPSignalType.VAH_ACCEPTANCE.value
                 instrument = TradeInstrument.CALL.value
@@ -508,7 +526,13 @@ class SVPVWAPSignals:
 
             # V1 signals (lower priority if no V2 signal)
             if sig == 0:
-                val_bounce = (low <= row["val"]) and (close > row["val"])
+                # val_bounce: Only trigger when POC is flat or rising (trend filter)
+                # Avoids catching falling knives when POC is migrating down
+                poc_dir = row.get("poc_migrate_dir", 0)
+                val_bounce = (
+                    (low <= row["val"]) and (close > row["val"])
+                    and poc_dir >= 0  # POC flat or migrating up
+                )
                 vwap_bounce = (low <= row["vwap_lower_inner"]) and (
                     close > row["vwap_lower_inner"]
                 )
@@ -535,8 +559,8 @@ class SVPVWAPSignals:
             # --- BEARISH SIGNALS ---
 
             if sig == 0:
-                # V2: VAL acceptance with POC migrating down → strong bearish
-                if val_acceptance and poc_migrate_dn:
+                # V2: VAL breakout with POC migrating down → strong bearish (best signal)
+                if val_breakout and poc_migrate_dn:
                     sig = -1
                     sig_type = SVPSignalType.VAL_ACCEPTANCE.value
                     instrument = TradeInstrument.PUT.value
@@ -547,8 +571,8 @@ class SVPVWAPSignals:
                     sig_type = SVPSignalType.LVN_BREAKOUT.value
                     instrument = TradeInstrument.PUT.value
                     strength = 4
-                # V2: VAL acceptance only
-                elif val_acceptance and close < row["val"]:
+                # V2: VAL breakout (enter on first bar breaking below VAL)
+                elif val_breakout and vol_ok:
                     sig = -1
                     sig_type = SVPSignalType.VAL_ACCEPTANCE.value
                     instrument = TradeInstrument.PUT.value
