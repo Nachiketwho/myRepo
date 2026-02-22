@@ -25,6 +25,13 @@ from backtester.fno_optimizer import (
     run_fno_optimization, best_fno_params,
     FNO_PARAM_GRID, FNO_SL_GRID, FNO_RR_GRID, FNO_EMA_GRID, FNO_STRENGTH_GRID,
 )
+from backtester.svp_vwap import (
+    SVPVWAPEngine, SVPVWAPResult, SVPVWAPTrade,
+    SVPVWAPSignals, SVPSignalType,
+    VolumeProfileLevel, compute_volume_profile,
+    run_svp_vwap_grid, build_svp_trade_log,
+    VALUE_AREA_PCT, DEFAULT_NUM_BINS, SVP_DEFAULT_CONFIG,
+)
 from backtester.ema_crossover import (
     EMACrossoverEngine, EMACrossoverResult, EMACrossoverTrade,
     SLStrategy, PositionSizing, SLCalculator, PositionSizer,
@@ -115,4 +122,17 @@ __all__ = [
     "atr",
     "swing_high",
     "swing_low",
+    # SVP+VWAP strategy
+    "SVPVWAPEngine",
+    "SVPVWAPResult",
+    "SVPVWAPTrade",
+    "SVPVWAPSignals",
+    "SVPSignalType",
+    "VolumeProfileLevel",
+    "compute_volume_profile",
+    "run_svp_vwap_grid",
+    "build_svp_trade_log",
+    "VALUE_AREA_PCT",
+    "DEFAULT_NUM_BINS",
+    "SVP_DEFAULT_CONFIG",
 ]
