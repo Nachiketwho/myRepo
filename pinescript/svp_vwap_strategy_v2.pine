@@ -120,9 +120,9 @@ val_ = math.max(poc - vaRange - (sessionRange * 0.15), sessionLow)
 // POC MIGRATION
 // ============================================================================
 
-sessionStep = math.max(1, sessionLookback / 2)
-prevPOC = sumVol > 0 ? ta.valuewhen(bar_index % int(sessionStep) == 0, poc, pocMigrateSessions - 1) : poc
-pocShift = prevPOC > 0 ? (poc - prevPOC) / prevPOC : 0.0
+// POC migration - compare current POC to smoothed POC (fixed calculation)
+pocSmoothed = ta.sma(poc, sessionLookback)
+pocShift = pocSmoothed > 0 ? (poc - pocSmoothed) / pocSmoothed : 0.0
 pocMigrateDir = pocShift > pocMigrateThreshold ? 1 : pocShift < -pocMigrateThreshold ? -1 : 0
 
 // ============================================================================
@@ -241,16 +241,16 @@ valBreakout = prevClose >= prevVAL and close < val_
 pocMigrateUp = pocMigrateDir == 1
 pocMigrateDown = pocMigrateDir == (-1)
 
-// V1 Basic Signals with trend filters
+// V1 Basic Signals (removed strict pocDir filters that blocked most signals)
 pocDir = pocMigrateDir
 
-valBounce = low <= val_ and close > val_ and pocDir >= 0
-vwapBounce = low <= vwapLowerInner and close > vwapLowerInner and pocDir >= 0  // Trend filter
-pocBreakUp = barsAbovePOC >= pocBreakBars and prevClose <= prevPOCVal
+valBounce = low <= val_ and close > val_
+vwapBounce = low <= vwapLowerInner and close > vwapLowerInner
+pocBreakUp = barsAbovePOC >= pocBreakBars
 
-vahReject = high >= vah and close < vah and pocDir <= 0
-vwapReject = high >= vwapUpperInner and close < vwapUpperInner and pocDir <= 0
-pocBreakDown = barsBelowPOC >= pocBreakBars and prevClose >= prevPOCVal
+vahReject = high >= vah and close < vah
+vwapReject = high >= vwapUpperInner and close < vwapUpperInner
+pocBreakDown = barsBelowPOC >= pocBreakBars
 
 // Signal Priority
 signal := 0
