@@ -22,7 +22,7 @@ vwapBandOuter = input.float(2.0, "Outer Band StdDev", minval=1.0, maxval=4.0, st
 
 // Signal Settings
 grp_signal = "Signal Settings"
-volumeConfirmMult = input.float(1.1, "Volume Confirm Multiplier", minval=1.0, maxval=2.0, step=0.1, group=grp_signal)
+volumeConfirmMult = input.float(1.0, "Volume Confirm Multiplier", minval=1.0, maxval=2.0, step=0.1, group=grp_signal)
 lvnVolumeSurge = input.float(1.3, "LVN Volume Surge Multiplier", minval=1.1, maxval=3.0, step=0.1, group=grp_signal)
 pocBreakBars = input.int(3, "POC Break Confirmation Bars", minval=1, maxval=5, group=grp_signal)
 pocMigrateSessions = input.int(3, "POC Migration Sessions", minval=2, maxval=5, group=grp_signal)
@@ -327,9 +327,15 @@ tpPoints = slPoints * tpRRRatio
 // STRATEGY EXECUTION
 // ============================================================================
 
-// Entry conditions
-longCondition = signal == 1 and signalStrength >= 1
-shortCondition = signal == (-1) and signalStrength >= 1
+// SIMPLIFIED Entry conditions - use VWAP bands directly (these actually work)
+// VWAP bounce = price touches lower band and closes above it
+// VWAP reject = price touches upper band and closes below it
+simpleVwapBounce = low <= vwapLowerInner and close > vwapLowerInner
+simpleVwapReject = high >= vwapUpperInner and close < vwapUpperInner
+
+// Entry conditions - simplified for reliability
+longCondition = simpleVwapBounce or valBounce or (signal == 1 and signalStrength >= 1)
+shortCondition = simpleVwapReject or vahReject or (signal == (-1) and signalStrength >= 1)
 
 // Calculate SL/TP levels
 longSL = close - slPoints
@@ -445,6 +451,12 @@ plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLev
 plotshape(showSignals and signal == 1 and signalStrength >= 3, title="Strong Long", location=location.belowbar, style=shape.triangleup, size=size.normal, color=colBullish)
 
 plotshape(showSignals and signal == (-1) and signalStrength >= 3, title="Strong Short", location=location.abovebar, style=shape.triangledown, size=size.normal, color=colBearish)
+
+// DEBUG: Show ALL entry conditions (simplified VWAP signals)
+plotshape(simpleVwapBounce, title="DEBUG: VWAP Bounce", location=location.belowbar, style=shape.circle, size=size.tiny, color=color.blue)
+plotshape(simpleVwapReject, title="DEBUG: VWAP Reject", location=location.abovebar, style=shape.circle, size=size.tiny, color=color.orange)
+plotshape(valBounce, title="DEBUG: VAL Bounce", location=location.belowbar, style=shape.diamond, size=size.tiny, color=color.lime)
+plotshape(vahReject, title="DEBUG: VAH Reject", location=location.abovebar, style=shape.diamond, size=size.tiny, color=color.red)
 
 // ============================================================================
 // INFO TABLE
