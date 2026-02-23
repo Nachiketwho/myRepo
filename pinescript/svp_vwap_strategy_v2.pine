@@ -2,11 +2,8 @@
 // SVP+VWAP Strategy V2 with LVN Expansion
 // Session Volume Profile + VWAP Combined Strategy
 
-//@version=5
-strategy("SVP + VWAP Strategy V2", shorttitle="SVP+VWAP", overlay=true,
-    initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=25,
-    commission_type=strategy.commission.cash_per_contract, commission_value=20,
-    slippage=1, pyramiding=0)
+//@version=6
+strategy("SVP + VWAP Strategy V2", shorttitle="SVP+VWAP", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=25, commission_type=strategy.commission.cash_per_contract, commission_value=20, slippage=1, pyramiding=0)
 
 // ============================================================================
 // INPUTS
@@ -437,26 +434,17 @@ bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == 1 ? color.new(co
 bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == (-1) ? color.new(colBearish, 85) : na, title="LVN Expansion Down")
 
 // LVN Expansion success/failure markers
-plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == 1,
-    title="LVN Expansion Success Up", location=location.abovebar,
-    style=shape.flag, size=size.small, color=colBullish, text="EXP")
+plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == 1, title="LVN Expansion Success Up", location=location.abovebar, style=shape.flag, size=size.small, color=colBullish, text="EXP")
 
-plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == (-1),
-    title="LVN Expansion Success Down", location=location.belowbar,
-    style=shape.flag, size=size.small, color=colBearish, text="EXP")
+plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == (-1), title="LVN Expansion Success Down", location=location.belowbar, style=shape.flag, size=size.small, color=colBearish, text="EXP")
 
 // Trailing Stop Level
-plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na,
-    "Trailing SL", color.new(color.yellow, 0), 2, plot.style_linebr, title="Trailing Stop")
+plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na, "Trailing SL", color.new(color.yellow, 0), 2, plot.style_linebr, title="Trailing Stop")
 
 // Signal markers
-plotshape(showSignals and signal == 1 and signalStrength >= 3,
-    title="Strong Long", location=location.belowbar,
-    style=shape.triangleup, size=size.normal, color=colBullish)
+plotshape(showSignals and signal == 1 and signalStrength >= 3, title="Strong Long", location=location.belowbar, style=shape.triangleup, size=size.normal, color=colBullish)
 
-plotshape(showSignals and signal == (-1) and signalStrength >= 3,
-    title="Strong Short", location=location.abovebar,
-    style=shape.triangledown, size=size.normal, color=colBearish)
+plotshape(showSignals and signal == (-1) and signalStrength >= 3, title="Strong Short", location=location.abovebar, style=shape.triangledown, size=size.normal, color=colBearish)
 
 // ============================================================================
 // INFO TABLE
