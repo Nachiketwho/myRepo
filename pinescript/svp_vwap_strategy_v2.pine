@@ -1,5 +1,5 @@
-// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
-// © SVP+VWAP Strategy V2 with LVN Expansion
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0
+// SVP+VWAP Strategy V2 with LVN Expansion
 // Session Volume Profile + VWAP Combined Strategy
 
 //@version=5
@@ -264,12 +264,12 @@ tradeInstrument := ""
 // BULLISH
 if vahBreakout and pocMigrateUp
     signal := 1
-    signalType := "VAH+POC↑"
+    signalType := "VAH+POC_UP"
     tradeInstrument := "CALL"
     signalStrength := 4
 else if lvnBreakUp
     signal := 1
-    signalType := "LVN_EXP↑"
+    signalType := "LVN_EXP_UP"
     tradeInstrument := "CALL"
     signalStrength := 4
 else if vahBreakout and volConfirm
@@ -279,25 +279,25 @@ else if vahBreakout and volConfirm
     signalStrength := 3
 else if pocMigrateUp and volConfirm
     signal := 1
-    signalType := "POC↑"
+    signalType := "POC_UP"
     tradeInstrument := "CALL"
     signalStrength := 2
 else if valBounce or vwapBounce or pocBreakUp
     signal := 1
     signalStrength := (valBounce ? 1 : 0) + (vwapBounce ? 1 : 0) + (pocBreakUp ? 1 : 0) + (volConfirm ? 1 : 0)
-    signalType := valBounce ? "VAL_B" : vwapBounce ? "VWAP_B" : "POC_B↑"
+    signalType := valBounce ? "VAL_B" : vwapBounce ? "VWAP_B" : "POC_BRK_UP"
     tradeInstrument := "CALL"
 
 // BEARISH
 if signal == 0
     if valBreakout and pocMigrateDown
         signal := -1
-        signalType := "VAL+POC↓"
+        signalType := "VAL+POC_DN"
         tradeInstrument := "PUT"
         signalStrength := 4
     else if lvnBreakDown
         signal := -1
-        signalType := "LVN_EXP↓"
+        signalType := "LVN_EXP_DN"
         tradeInstrument := "PUT"
         signalStrength := 4
     else if valBreakout and volConfirm
@@ -307,13 +307,13 @@ if signal == 0
         signalStrength := 3
     else if pocMigrateDown and volConfirm
         signal := -1
-        signalType := "POC↓"
+        signalType := "POC_DN"
         tradeInstrument := "PUT"
         signalStrength := 2
     else if vahReject or vwapReject or pocBreakDown
         signal := -1
         signalStrength := (vahReject ? 1 : 0) + (vwapReject ? 1 : 0) + (pocBreakDown ? 1 : 0) + (volConfirm ? 1 : 0)
-        signalType := vahReject ? "VAH_R" : vwapReject ? "VWAP_R" : "POC_B↓"
+        signalType := vahReject ? "VAH_R" : vwapReject ? "VWAP_R" : "POC_BRK_DN"
         tradeInstrument := "PUT"
 
 signalStrength := math.min(signalStrength, 4)
@@ -439,11 +439,11 @@ bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == (-1) ? color.new
 // LVN Expansion success/failure markers
 plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == 1,
     title="LVN Expansion Success Up", location=location.abovebar,
-    style=shape.flag, size=size.small, color=colBullish, text="EXP✓")
+    style=shape.flag, size=size.small, color=colBullish, text="EXP")
 
 plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == (-1),
     title="LVN Expansion Success Down", location=location.belowbar,
-    style=shape.flag, size=size.small, color=colBearish, text="EXP✓")
+    style=shape.flag, size=size.small, color=colBearish, text="EXP")
 
 // Trailing Stop Level
 plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na,
@@ -481,7 +481,7 @@ if barstate.islast
     table.cell(infoTable, 1, 4, str.tostring(vwapLine, "#.##"), text_color=color.white, text_size=size.small)
 
     table.cell(infoTable, 0, 5, "POC Dir", text_color=color.white, text_size=size.small)
-    pocText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == (-1) ? "↓ DOWN" : "→ FLAT"
+    pocText = pocMigrateDir == 1 ? "UP" : pocMigrateDir == (-1) ? "DOWN" : "FLAT"
     table.cell(infoTable, 1, 5, pocText, text_color=pocMigrateDir == 1 ? colBullish : pocMigrateDir == (-1) ? colBearish : color.gray, text_size=size.small)
 
     table.cell(infoTable, 0, 6, "Signal", text_color=color.white, text_size=size.small)
@@ -510,8 +510,8 @@ if barstate.islast
 // ALERTS
 // ============================================================================
 
-alertcondition(lvnBreakUp, title="LVN Expansion UP", message="🚀 LVN EXPANSION TRADE - BULLISH - {{ticker}} at {{close}}")
-alertcondition(lvnBreakDown, title="LVN Expansion DOWN", message="🔻 LVN EXPANSION TRADE - BEARISH - {{ticker}} at {{close}}")
-alertcondition(lvnExpansionSuccess, title="LVN Expansion Success", message="✅ LVN Expansion completed successfully on {{ticker}}")
-alertcondition(vahBreakout and pocMigrateUp, title="Strong Bullish Setup", message="🟢 VAH Breakout + POC Migrating UP - {{ticker}} - Trade CALL")
-alertcondition(valBreakout and pocMigrateDown, title="Strong Bearish Setup", message="🔴 VAL Breakout + POC Migrating DOWN - {{ticker}} - Trade PUT")
+alertcondition(lvnBreakUp, title="LVN Expansion UP", message="LVN EXPANSION TRADE - BULLISH - {{ticker}} at {{close}}")
+alertcondition(lvnBreakDown, title="LVN Expansion DOWN", message="LVN EXPANSION TRADE - BEARISH - {{ticker}} at {{close}}")
+alertcondition(lvnExpansionSuccess, title="LVN Expansion Success", message="LVN Expansion completed successfully on {{ticker}}")
+alertcondition(vahBreakout and pocMigrateUp, title="Strong Bullish Setup", message="VAH Breakout + POC Migrating UP - {{ticker}} - Trade CALL")
+alertcondition(valBreakout and pocMigrateDown, title="Strong Bearish Setup", message="VAL Breakout + POC Migrating DOWN - {{ticker}} - Trade PUT")
