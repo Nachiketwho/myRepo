@@ -192,7 +192,7 @@ if inLVNExpansion
     if lvnDirection == 1 and high >= lvnExpansionTarget
         lvnExpansionSuccess := true
         inLVNExpansion := false
-    else if lvnDirection == -1 and low <= lvnExpansionTarget
+    else if lvnDirection == (-1) and low <= lvnExpansionTarget
         lvnExpansionSuccess := true
         inLVNExpansion := false
 
@@ -200,7 +200,7 @@ if inLVNExpansion
     if barsInExpansion >= lvnExpansionBars
         if lvnDirection == 1 and close < lvnEntryPrice
             lvnExpansionFailed := true
-        else if lvnDirection == -1 and close > lvnEntryPrice
+        else if lvnDirection == (-1) and close > lvnEntryPrice
             lvnExpansionFailed := true
         inLVNExpansion := false
 
@@ -242,7 +242,7 @@ prevPOCVal = poc[1]
 vahBreakout = prevClose <= prevVAH and close > vah
 valBreakout = prevClose >= prevVAL and close < val_
 pocMigrateUp = pocMigrateDir == 1
-pocMigrateDown = pocMigrateDir == -1
+pocMigrateDown = pocMigrateDir == (-1)
 
 // V1 Basic Signals with trend filters
 pocDir = pocMigrateDir
@@ -332,7 +332,7 @@ tpPoints = slPoints * tpRRRatio
 
 // Entry conditions
 longCondition = signal == 1 and signalStrength >= 2
-shortCondition = signal == -1 and signalStrength >= 2
+shortCondition = signal == (-1) and signalStrength >= 2
 
 // Calculate SL/TP levels
 longSL = close - slPoints
@@ -434,14 +434,14 @@ bgcolor(showLVNZones and isLVN ? color.new(colLVN, 90) : na, title="LVN Zone")
 
 // LVN Expansion highlighting
 bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == 1 ? color.new(colBullish, 85) : na, title="LVN Expansion Up")
-bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == -1 ? color.new(colBearish, 85) : na, title="LVN Expansion Down")
+bgcolor(showLVNExpansion and inLVNExpansion and lvnDirection == (-1) ? color.new(colBearish, 85) : na, title="LVN Expansion Down")
 
 // LVN Expansion success/failure markers
 plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == 1,
     title="LVN Expansion Success Up", location=location.abovebar,
     style=shape.flag, size=size.small, color=colBullish, text="EXP✓")
 
-plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == -1,
+plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == (-1),
     title="LVN Expansion Success Down", location=location.belowbar,
     style=shape.flag, size=size.small, color=colBearish, text="EXP✓")
 
@@ -454,7 +454,7 @@ plotshape(showSignals and signal == 1 and signalStrength >= 3,
     title="Strong Long", location=location.belowbar,
     style=shape.triangleup, size=size.normal, color=colBullish)
 
-plotshape(showSignals and signal == -1 and signalStrength >= 3,
+plotshape(showSignals and signal == (-1) and signalStrength >= 3,
     title="Strong Short", location=location.abovebar,
     style=shape.triangledown, size=size.normal, color=colBearish)
 
@@ -481,11 +481,11 @@ if barstate.islast
     table.cell(infoTable, 1, 4, str.tostring(vwapLine, "#.##"), text_color=color.white, text_size=size.small)
 
     table.cell(infoTable, 0, 5, "POC Dir", text_color=color.white, text_size=size.small)
-    pocText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == -1 ? "↓ DOWN" : "→ FLAT"
-    table.cell(infoTable, 1, 5, pocText, text_color=pocMigrateDir == 1 ? colBullish : pocMigrateDir == -1 ? colBearish : color.gray, text_size=size.small)
+    pocText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == (-1) ? "↓ DOWN" : "→ FLAT"
+    table.cell(infoTable, 1, 5, pocText, text_color=pocMigrateDir == 1 ? colBullish : pocMigrateDir == (-1) ? colBearish : color.gray, text_size=size.small)
 
     table.cell(infoTable, 0, 6, "Signal", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 6, signalType != "" ? signalType : "-", text_color=signal == 1 ? colBullish : signal == -1 ? colBearish : color.gray, text_size=size.small)
+    table.cell(infoTable, 1, 6, signalType != "" ? signalType : "-", text_color=signal == 1 ? colBullish : signal == (-1) ? colBearish : color.gray, text_size=size.small)
 
     table.cell(infoTable, 0, 7, "Trade", text_color=color.white, text_size=size.small)
     table.cell(infoTable, 1, 7, tradeInstrument != "" ? tradeInstrument : "-", text_color=color.yellow, text_size=size.small)

@@ -170,7 +170,7 @@ prevPOCVal = poc[1]
 vahBreakout = prevClose <= prevVAH and close > vah
 valBreakout = prevClose >= prevVAL and close < val_
 pocMigrateUp = pocMigrateDir == 1
-pocMigrateDown = pocMigrateDir == -1
+pocMigrateDown = pocMigrateDir == (-1)
 
 // LVN Breakout detection
 lvnBreakUp = false
@@ -335,12 +335,12 @@ plotshape(showSignals and signal == 1 and signalStrength < 3 and signalStrength 
     text="")
 
 // Bearish signals
-plotshape(showSignals and signal == -1 and signalStrength >= 3,
+plotshape(showSignals and signal == (-1) and signalStrength >= 3,
     title="Strong Sell", location=location.abovebar,
     style=shape.triangledown, size=size.normal, color=colBearish,
     text="")
 
-plotshape(showSignals and signal == -1 and signalStrength < 3 and signalStrength > 0,
+plotshape(showSignals and signal == (-1) and signalStrength < 3 and signalStrength > 0,
     title="Sell", location=location.abovebar,
     style=shape.triangledown, size=size.small, color=color.new(colBearish, 30),
     text="")
@@ -385,13 +385,13 @@ if barstate.islast
     table.cell(infoTable, 1, 4, str.tostring(vwapLine, "#.##"), text_color=color.white, text_size=size.small)
 
     table.cell(infoTable, 0, 5, "POC Dir", text_color=color.white, text_size=size.small)
-    pocDirText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == -1 ? "↓ DOWN" : "→ FLAT"
-    pocDirColor = pocMigrateDir == 1 ? colBullish : pocMigrateDir == -1 ? colBearish : color.gray
+    pocDirText = pocMigrateDir == 1 ? "↑ UP" : pocMigrateDir == (-1) ? "↓ DOWN" : "→ FLAT"
+    pocDirColor = pocMigrateDir == 1 ? colBullish : pocMigrateDir == (-1) ? colBearish : color.gray
     table.cell(infoTable, 1, 5, pocDirText, text_color=pocDirColor, text_size=size.small)
 
     table.cell(infoTable, 0, 6, "Signal", text_color=color.white, text_size=size.small)
-    sigText = signal == 1 ? "LONG" : signal == -1 ? "SHORT" : "NONE"
-    sigColor = signal == 1 ? colBullish : signal == -1 ? colBearish : color.gray
+    sigText = signal == 1 ? "LONG" : signal == (-1) ? "SHORT" : "NONE"
+    sigColor = signal == 1 ? colBullish : signal == (-1) ? colBearish : color.gray
     table.cell(infoTable, 1, 6, sigText, text_color=sigColor, text_size=size.small)
 
     table.cell(infoTable, 0, 7, "Instrument", text_color=color.white, text_size=size.small)
@@ -407,7 +407,7 @@ alertcondition(signal == 1 and signalStrength >= 3,
     message="SVP+VWAP: Strong BULLISH signal - {{ticker}} - Trade CALL - {{signalType}}")
 
 // Strong bearish alert
-alertcondition(signal == -1 and signalStrength >= 3,
+alertcondition(signal == (-1) and signalStrength >= 3,
     title="Strong Bearish Signal",
     message="SVP+VWAP: Strong BEARISH signal - {{ticker}} - Trade PUT - {{signalType}}")
 
