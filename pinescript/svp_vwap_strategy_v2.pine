@@ -418,13 +418,13 @@ if trailMode != "None" and strategy.position_size != 0
 // PLOTTING
 // ============================================================================
 
-plot(showVWAP ? vwapLine : na, "VWAP", colVWAP, 2)
-plot(showVWAPBands ? vwapUpperInner : na, "VWAP Upper", color.new(colVWAP, 50), 1)
-plot(showVWAPBands ? vwapLowerInner : na, "VWAP Lower", color.new(colVWAP, 50), 1)
+plot(showVWAP ? vwapLine : na, title="VWAP", color=colVWAP, linewidth=2)
+plot(showVWAPBands ? vwapUpperInner : na, title="VWAP Upper", color=color.new(colVWAP, 50), linewidth=1)
+plot(showVWAPBands ? vwapLowerInner : na, title="VWAP Lower", color=color.new(colVWAP, 50), linewidth=1)
 
-plot(showSVPLevels ? poc : na, "POC", colPOC, 2, plot.style_stepline)
-plot(showSVPLevels ? vah : na, "VAH", colVAH, 1, plot.style_stepline)
-plot(showSVPLevels ? val_ : na, "VAL", colVAL, 1, plot.style_stepline)
+plot(showSVPLevels ? poc : na, title="POC", color=colPOC, linewidth=2, style=plot.style_stepline)
+plot(showSVPLevels ? vah : na, title="VAH", color=colVAH, linewidth=1, style=plot.style_stepline)
+plot(showSVPLevels ? val_ : na, title="VAL", color=colVAL, linewidth=1, style=plot.style_stepline)
 
 // LVN Zones
 bgcolor(showLVNZones and isLVN ? color.new(colLVN, 90) : na, title="LVN Zone")
@@ -439,7 +439,7 @@ plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == 1, title=
 plotshape(showLVNExpansion and lvnExpansionSuccess and lvnDirection == (-1), title="LVN Expansion Success Down", location=location.belowbar, style=shape.flag, size=size.small, color=colBearish, text="EXP")
 
 // Trailing Stop Level
-plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na, "Trailing SL", color.new(color.yellow, 0), 2, plot.style_linebr, title="Trailing Stop")
+plot(strategy.position_size != 0 and not na(trailingStopLevel) ? trailingStopLevel : na, title="Trailing SL", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
 
 // Signal markers
 plotshape(showSignals and signal == 1 and signalStrength >= 3, title="Strong Long", location=location.belowbar, style=shape.triangleup, size=size.normal, color=colBullish)
