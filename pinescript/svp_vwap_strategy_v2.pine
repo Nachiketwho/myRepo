@@ -46,10 +46,11 @@ tpRRRatio = input.float(2.0, "Take Profit R:R Ratio", minval=1.0, maxval=5.0, st
 // Trend Filter (to eliminate sideways market noise)
 grp_trend = "Trend Filter"
 useTrendFilter = input.bool(true, "Enable Trend Filter", group=grp_trend, tooltip="Filter out signals in sideways/choppy markets")
-trendEmaLength = input.int(20, "Trend EMA Length", minval=5, maxval=100, group=grp_trend)
-useADXFilter = input.bool(true, "Use ADX Filter", group=grp_trend, tooltip="Only trade when market is trending (ADX > threshold)")
-adxLength = input.int(14, "ADX Length", minval=5, maxval=30, group=grp_trend)
-adxThreshold = input.float(20.0, "ADX Threshold", minval=10, maxval=40, step=1.0, group=grp_trend, tooltip="ADX above this = trending market")
+trendFilterType = input.string("EMA Crossover", "Filter Type", options=["EMA Crossover", "Price vs EMA", "Supertrend"], group=grp_trend)
+fastEmaLength = input.int(5, "Fast EMA Length", minval=3, maxval=20, group=grp_trend)
+slowEmaLength = input.int(9, "Slow EMA Length", minval=5, maxval=50, group=grp_trend)
+supertrendFactor = input.float(3.0, "Supertrend Factor", minval=1.0, maxval=5.0, step=0.5, group=grp_trend)
+supertrendPeriod = input.int(10, "Supertrend Period", minval=5, maxval=20, group=grp_trend)
 
 // Trailing Stop
 grp_trail = "Trailing Stop"
@@ -137,34 +138,39 @@ pocMigrateDir = pocShift > pocMigrateThreshold ? 1 : pocShift < -pocMigrateThres
 // TREND FILTER (Eliminates sideways market noise)
 // ============================================================================
 
-// EMA for trend direction
-trendEma = ta.ema(close, trendEmaLength)
-isBullishTrend = close > trendEma
-isBearishTrend = close < trendEma
+// EMA Crossover (5/9) - most reliable
+fastEma = ta.ema(close, fastEmaLength)
+slowEma = ta.ema(close, slowEmaLength)
+emaCrossUp = fastEma > slowEma   // Bullish: fast above slow
+emaCrossDown = fastEma < slowEma  // Bearish: fast below slow
 
-// ADX for trend strength (only trade when trending)
-dirmov(len) =>
-    up = ta.change(high)
-    down = -ta.change(low)
-    plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
-    minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
-    truerange = ta.rma(ta.tr, len)
-    plus = fixnan(100 * ta.rma(plusDM, len) / truerange)
-    minus = fixnan(100 * ta.rma(minusDM, len) / truerange)
-    [plus, minus]
+// Supertrend calculation
+[stValue, stDir] = ta.supertrend(supertrendFactor, supertrendPeriod)
+supertrendBullish = stDir < 0  // Price above supertrend = bullish
+supertrendBearish = stDir > 0  // Price below supertrend = bearish
 
-adx(dilen, adxlen) =>
-    [plus, minus] = dirmov(dilen)
-    sum = plus + minus
-    adxValue = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), adxlen)
-    adxValue
+// Combined trend filter based on selected type
+var bool trendFilterLong = false
+var bool trendFilterShort = false
 
-adxValue = adx(adxLength, adxLength)
-isTrending = adxValue > adxThreshold
+if not useTrendFilter
+    trendFilterLong := true
+    trendFilterShort := true
+else if trendFilterType == "EMA Crossover"
+    // 5/9 EMA crossover - Long when fast > slow, Short when fast < slow
+    trendFilterLong := emaCrossUp
+    trendFilterShort := emaCrossDown
+else if trendFilterType == "Price vs EMA"
+    // Price vs slow EMA - Long when price > EMA, Short when price < EMA
+    trendFilterLong := close > slowEma
+    trendFilterShort := close < slowEma
+else if trendFilterType == "Supertrend"
+    // Supertrend direction
+    trendFilterLong := supertrendBullish
+    trendFilterShort := supertrendBearish
 
-// Combined trend filter
-trendFilterLong = not useTrendFilter or (isBullishTrend and (not useADXFilter or isTrending))
-trendFilterShort = not useTrendFilter or (isBearishTrend and (not useADXFilter or isTrending))
+// Plot trend indicator
+trendEma = slowEma  // For display
 
 // ============================================================================
 // LVN DETECTION & EXPANSION TRACKING
